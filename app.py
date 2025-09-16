@@ -111,6 +111,20 @@ def add_filters(sql: str, params: List[Any], args) -> Tuple[str, List[Any]]:
             # Flexible match: ignore spaces in both DB and input
             sql += " AND REPLACE(address, ' ', '') LIKE ? COLLATE NOCASE"
             params.append(f"%{addr.replace(' ', '')}%")
+    
+    lat = args.get("latitude")
+    if lat:
+        lat_str = str(lat).strip()
+    # prefix match: works for both partial and full values
+        sql += " AND CAST(latitude AS TEXT) LIKE ?"
+        params.append(f"{lat_str}%")
+
+# Longitude prefix match (accepts lon or longitude)
+    lon = args.get("longitude")
+    if lon:
+        lon_str = str(lon).strip()
+        sql += " AND CAST(longitude AS TEXT) LIKE ?"
+        params.append(f"{lon_str}%")
 
 
     # Postcode prefix/full (DB column is 'postal')
