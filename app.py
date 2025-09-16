@@ -99,6 +99,19 @@ def add_filters(sql: str, params: List[Any], args) -> Tuple[str, List[Any]]:
         like = f"%{q}%"
         sql += " AND (address LIKE ? OR city LIKE ? OR REPLACE(postal,' ','') LIKE REPLACE(?,' ',''))"
         params += [like, like, q]
+    # Address filter (URL param = addr)
+
+    addr = args.get("address")
+    if addr:
+        # If only digits: match house number at the beginning
+        if addr.isdigit():
+            sql += " AND address LIKE ? COLLATE NOCASE"
+            params.append(f"{addr} %")
+        else:
+            # Flexible match: ignore spaces in both DB and input
+            sql += " AND REPLACE(address, ' ', '') LIKE ? COLLATE NOCASE"
+            params.append(f"%{addr.replace(' ', '')}%")
+
 
     # Postcode prefix/full (DB column is 'postal')
     postcode = args.get("postcode")
