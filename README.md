@@ -11,6 +11,7 @@ The main endpoint right now is `/search`.
 
 - Python 3.9+
 - pip (Python package installer)
+- gunicorn
 
 ### 2. Install dependencies
 

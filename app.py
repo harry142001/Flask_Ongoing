@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
-import sqlite3, json
+import sqlite3, json, re
 from typing import List, Dict, Any, Tuple
 
 DB_PATH = "Database1.db"
@@ -103,12 +103,24 @@ def add_filters(sql: str, params: List[Any], args) -> Tuple[str, List[Any]]:
       - province  (was 'state')
     """
     # Free-text across address/city/postal (DB column is still 'postal')
+       # ----- One-box "formatted address" search (street/city/province|state/postal) -----
     q = args.get("q")
     if q:
-        like = f"%{q}%"
-        sql += " AND (address LIKE ? OR city LIKE ? OR REPLACE(postal,' ','') LIKE REPLACE(?,' ',''))"
-        params += [like, like, q]
-    # Address filter (URL param = addr)
+        # Split on spaces/commas/parentheses/hyphens; keep non-empty tokens
+        terms = [t.strip() for t in re.split(r"[,\s()\-]+", q) if t.strip()]
+        for t in terms:
+            # each term must appear in at least one of the fields (AND across terms, OR across fields)
+            sql += (
+                " AND ("
+                " address LIKE ? COLLATE NOCASE"
+                " OR city LIKE ? COLLATE NOCASE"
+                f" OR {REGION_SQL} LIKE ? COLLATE NOCASE"
+                " OR REPLACE(postal,' ','') LIKE REPLACE(?,' ','')"
+                ")"
+            )
+            like = f"%{t}%"
+            params += [like, like, like, like]
+
 
     addr = args.get("address")
     if addr:
@@ -200,9 +212,9 @@ def api_search():
     """
     args = request.args
     view  = args.get("view", "json")
-    limit = max(1, min(parse_int(args.get("limit"), 50), 200))
+    limit = parse_int(args.get("limit"))
     page  = max(1, parse_int(args.get("page"), 1))
-    offset = (page - 1) * limit
+    offset = (page - 1) * (limit or 0)
 
     sql = f"SELECT rowid AS id, * FROM {TABLE} WHERE 1=1"
     params: List[Any] = []
@@ -210,8 +222,9 @@ def api_search():
 
     # If you do not want ordering, comment out the next line.
     sql += " ORDER BY id DESC"
-    sql += " LIMIT ? OFFSET ?"
-    params += [limit, offset]
+    if limit:
+        sql += " LIMIT ? OFFSET ?"
+        params += [limit, offset]
 
     with connect() as con:
         rows_db = rows_to_dicts(con.execute(sql, tuple(params)).fetchall())
