@@ -14,6 +14,15 @@ def connect():
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
     return con
+with connect() as con:
+    cols = {row["name"].lower() for row in con.execute(f"PRAGMA table_info({TABLE})")}
+HAS_STATE = "state" in cols
+HAS_PROVINCE = "province" in cols
+
+REGION_SQL = (
+    "COALESCE(province, state)" if HAS_PROVINCE and HAS_STATE
+    else ("province" if HAS_PROVINCE else "state")
+)
 
 def rows_to_dicts(rows) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
@@ -151,13 +160,14 @@ def add_filters(sql: str, params: List[Any], args) -> Tuple[str, List[Any]]:
         sql += " AND broker LIKE ?"
         params.append(f"%{broker}%")
 
-    # Province exact (DB column is 'state')
-    province = args.get("province")
-    if province:
-        sql += " AND state = ?"
-        params.append(province.upper())
-
+    region = args.get("province") or args.get("state")
+    if region:
+        region = str(region).strip()
+        
+        sql += f" AND UPPER({REGION_SQL}) LIKE UPPER(?)"
+        params.append(f"{region}%")
     return sql, params
+
 
 # ---------- Endpoints ----------
 @app.get("/health")
@@ -208,9 +218,14 @@ def api_search():
 
     # Normalize keys in the response (state->province, postal->postcode)
     rows = [to_api_row(r) for r in rows_db]
+
+    
+    for r in rows:
+        r["formatted_address"] = _full_address_from_row(r)
+
     return respond(rows, view)
 
-# Local dev runner (ignored in production with gunicorn)
+
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 5002))
