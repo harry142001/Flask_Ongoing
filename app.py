@@ -102,75 +102,101 @@ def add_filters(sql: str, params: List[Any], args) -> Tuple[str, List[Any]]:
       - postcode  (was 'postal')
       - province  (was 'state')
     """
-    # Free-text across address/city/postal (DB column is still 'postal')
-       # ----- One-box "formatted address" search (street/city/province|state/postal) -----
-    # ----- One-box "formatted address" search (street/city/province|state/postal) -----
     q = args.get("q")
     if q:
-        terms = [t.strip() for t in re.split(r"[,\s()]+", q) if t.strip()]
+        q_stripped = q.strip()
+        # Detect exact / literal mode: the whole q wrapped in double quotes
+        m = re.fullmatch(r'"(.*)"', q_stripped)
+        if m:
+            # ---------- EXACT (LITERAL) MODE ----------
+            phrase = m.group(1).strip()
+            phrase_clean_postal = clean_postal(phrase)
 
-        for t in terms:
-            like = f"%{t}%"
-            token_clean = clean_postal(t)
+            # Exact match on broker (case-insensitive)
+            sql += (
+                " AND ("
+                " broker = ? COLLATE NOCASE"
+                # If you ALSO want strict exact match on other fields, uncomment any of these:
+                " OR address = ? COLLATE NOCASE"
+                " OR city = ? COLLATE NOCASE"
+                f" OR {REGION_SQL} = ? COLLATE NOCASE"
+                " OR agent = ? COLLATE NOCASE"
+                # Exact on postal without spaces:
+                " OR REPLACE(postal,' ','') = ?"
+                ")"
+            )
+            # Params for the fields you enabled above (order must match the SQL)
+            params.append(phrase)
+            params.append(phrase)  # address
+            params.append(phrase)  # city
+            params.append(phrase)  # region
+            params.append(phrase)  # agent
+            params.append(phrase_clean_postal)  # postal (no spaces)
 
-            # Detect numeric-looking token for lat/lon prefix search
-            is_numberish = bool(re.fullmatch(r"-?\d+(\.\d+)?", t))
-            latlon_like = (t.strip() + "%") if is_numberish else like  # prefix for numbers, substring otherwise
+        else:
+            # ---------- KEYWORD MODE (current behavior) ----------
+            terms = [t.strip() for t in re.split(r"[,\s()]+", q) if t.strip()]
 
-            # Postal patterns
-            is_fsa = bool(re.fullmatch(r"[A-Z]\d[A-Z]", token_clean))
-            is_full_postal = bool(re.fullmatch(r"[A-Z]\d[A-Z]\d[A-Z]\d", token_clean))
-            is_us_zip5 = bool(re.fullmatch(r"\d{5}", t))
-            is_us_zip9 = bool(re.fullmatch(r"\d{5}-\d{4}", t))
+            for t in terms:
+                like = f"%{t}%"
+                token_clean = clean_postal(t)
 
-            if is_fsa or is_full_postal:
-                # Canadian postal: postal must start with token; others substring
-                sql += (
-                    " AND ("
-                    " address LIKE ? COLLATE NOCASE"
-                    " OR city LIKE ? COLLATE NOCASE"
-                    f" OR {REGION_SQL} LIKE ? COLLATE NOCASE"
-                    " OR agent LIKE ? COLLATE NOCASE"
-                    " OR broker LIKE ? COLLATE NOCASE"
-                    " OR CAST(latitude AS TEXT) LIKE ?"
-                    " OR CAST(longitude AS TEXT) LIKE ?"
-                    " OR REPLACE(postal,' ','') LIKE ?"  # prefix on postal
-                    ")"
-                )
-                params += [like, like, like, like, like, latlon_like, latlon_like, token_clean + "%"]
+                # Detect numeric-looking token for lat/lon prefix search
+                is_numberish = bool(re.fullmatch(r"-?\d+(\.\d+)?", t))
+                latlon_like = (t.strip() + "%") if is_numberish else like  # prefix for numbers, substring otherwise
 
-            elif is_us_zip5 or is_us_zip9:
-                # US ZIP: anchor postal to start by 5-digit prefix
-                zip_prefix = t.split("-")[0]
-                sql += (
-                    " AND ("
-                    " address LIKE ? COLLATE NOCASE"
-                    " OR city LIKE ? COLLATE NOCASE"
-                    f" OR {REGION_SQL} LIKE ? COLLATE NOCASE"
-                    " OR agent LIKE ? COLLATE NOCASE"
-                    " OR broker LIKE ? COLLATE NOCASE"
-                    " OR CAST(latitude AS TEXT) LIKE ?"
-                    " OR CAST(longitude AS TEXT) LIKE ?"
-                    " OR REPLACE(postal,' ','') LIKE ?"   # prefix on ZIP
-                    ")"
-                )
-                params += [like, like, like, like, like, latlon_like, latlon_like, zip_prefix + "%"]
+                # Postal patterns
+                is_fsa = bool(re.fullmatch(r"[A-Z]\d[A-Z]", token_clean))
+                is_full_postal = bool(re.fullmatch(r"[A-Z]\d[A-Z]\d[A-Z]\d", token_clean))
+                is_us_zip5 = bool(re.fullmatch(r"\d{5}", t))
+                is_us_zip9 = bool(re.fullmatch(r"\d{5}-\d{4}", t))
 
-            else:
-                # General tokens: substring everywhere (lat/lon use prefix if numeric)
-                sql += (
-                    " AND ("
-                    " address LIKE ? COLLATE NOCASE"
-                    " OR city LIKE ? COLLATE NOCASE"
-                    f" OR {REGION_SQL} LIKE ? COLLATE NOCASE"
-                    " OR agent LIKE ? COLLATE NOCASE"
-                    " OR broker LIKE ? COLLATE NOCASE"
-                    " OR CAST(latitude AS TEXT) LIKE ?"
-                    " OR CAST(longitude AS TEXT) LIKE ?"
-                    " OR REPLACE(postal,' ','') LIKE REPLACE(?,' ','')"  # substring on postal
-                    ")"
-                )
-                params += [like, like, like, like, like, latlon_like, latlon_like, like]
+                if is_fsa or is_full_postal:
+                    sql += (
+                        " AND ("
+                        " address LIKE ? COLLATE NOCASE"
+                        " OR city LIKE ? COLLATE NOCASE"
+                        f" OR {REGION_SQL} LIKE ? COLLATE NOCASE"
+                        " OR agent LIKE ? COLLATE NOCASE"
+                        " OR broker LIKE ? COLLATE NOCASE"
+                        " OR CAST(latitude AS TEXT) LIKE ?"
+                        " OR CAST(longitude AS TEXT) LIKE ?"
+                        " OR REPLACE(postal,' ','') LIKE ?"
+                        ")"
+                    )
+                    params += [like, like, like, like, like, latlon_like, latlon_like, token_clean + "%"]
+
+                elif is_us_zip5 or is_us_zip9:
+                    zip_prefix = t.split("-")[0]
+                    sql += (
+                        " AND ("
+                        " address LIKE ? COLLATE NOCASE"
+                        " OR city LIKE ? COLLATE NOCASE"
+                        f" OR {REGION_SQL} LIKE ? COLLATE NOCASE"
+                        " OR agent LIKE ? COLLATE NOCASE"
+                        " OR broker LIKE ? COLLATE NOCASE"
+                        " OR CAST(latitude AS TEXT) LIKE ?"
+                        " OR CAST(longitude AS TEXT) LIKE ?"
+                        " OR REPLACE(postal,' ','') LIKE ?"
+                        ")"
+                    )
+                    params += [like, like, like, like, like, latlon_like, latlon_like, zip_prefix + "%"]
+
+                else:
+                    sql += (
+                        " AND ("
+                        " address LIKE ? COLLATE NOCASE"
+                        " OR city LIKE ? COLLATE NOCASE"
+                        f" OR {REGION_SQL} LIKE ? COLLATE NOCASE"
+                        " OR agent LIKE ? COLLATE NOCASE"
+                        " OR broker LIKE ? COLLATE NOCASE"
+                        " OR CAST(latitude AS TEXT) LIKE ?"
+                        " OR CAST(longitude AS TEXT) LIKE ?"
+                        " OR REPLACE(postal,' ','') LIKE REPLACE(?,' ','')"
+                        ")"
+                    )
+                    params += [like, like, like, like, like, latlon_like, latlon_like, like]
+
 
 
 
