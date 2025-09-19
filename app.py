@@ -104,22 +104,61 @@ def add_filters(sql: str, params: List[Any], args) -> Tuple[str, List[Any]]:
     """
     # Free-text across address/city/postal (DB column is still 'postal')
        # ----- One-box "formatted address" search (street/city/province|state/postal) -----
+    # ----- One-box "formatted address" search (street/city/province|state/postal) -----
     q = args.get("q")
     if q:
         # Split on spaces/commas/parentheses/hyphens; keep non-empty tokens
         terms = [t.strip() for t in re.split(r"[,\s()\-]+", q) if t.strip()]
         for t in terms:
-            # each term must appear in at least one of the fields (AND across terms, OR across fields)
-            sql += (
-                " AND ("
-                " address LIKE ? COLLATE NOCASE"
-                " OR city LIKE ? COLLATE NOCASE"
-                f" OR {REGION_SQL} LIKE ? COLLATE NOCASE"
-                " OR REPLACE(postal,' ','') LIKE REPLACE(?,' ','')"
-                ")"
-            )
             like = f"%{t}%"
-            params += [like, like, like, like]
+
+            # Normalize token for postal checks (upper, no spaces)
+            token_clean = clean_postal(t)
+
+            # Detect Canadian FSA (A1A) or full postal (A1A1A1), and US ZIP (12345 or 12345-6789)
+            is_fsa = bool(re.fullmatch(r"[A-Z]\d[A-Z]", token_clean))
+            is_full_postal = bool(re.fullmatch(r"[A-Z]\d[A-Z]\d[A-Z]\d", token_clean))
+            is_us_zip5 = bool(re.fullmatch(r"\d{5}", t))
+            is_us_zip9 = bool(re.fullmatch(r"\d{5}-\d{4}", t))
+
+            if is_fsa or is_full_postal:
+                # For Canadian postals, anchor to START of postal (ignore spaces)
+                sql += (
+                    " AND ("
+                    " address LIKE ? COLLATE NOCASE"
+                    " OR city LIKE ? COLLATE NOCASE"
+                    f" OR {REGION_SQL} LIKE ? COLLATE NOCASE"
+                    " OR REPLACE(postal,' ','') LIKE ?"  # prefix match, no spaces
+                    ")"
+                )
+                params += [like, like, like, token_clean + "%"]
+
+            elif is_us_zip5 or is_us_zip9:
+                # For US ZIP, anchor to START; allow exact 5 or ZIP+4
+                # Normalize DB (no spaces) then do prefix on '12345' or exact '12345-6789'
+                zip_prefix = t.split("-")[0]  # '12345'
+                sql += (
+                    " AND ("
+                    " address LIKE ? COLLATE NOCASE"
+                    " OR city LIKE ? COLLATE NOCASE"
+                    f" OR {REGION_SQL} LIKE ? COLLATE NOCASE"
+                    " OR REPLACE(postal,' ','') LIKE ?"   # e.g., '12345%'
+                    ")"
+                )
+                params += [like, like, like, zip_prefix + "%"]
+
+            else:
+                # General substring matching for all other tokens
+                sql += (
+                    " AND ("
+                    " address LIKE ? COLLATE NOCASE"
+                    " OR city LIKE ? COLLATE NOCASE"
+                    f" OR {REGION_SQL} LIKE ? COLLATE NOCASE"
+                    " OR REPLACE(postal,' ','') LIKE REPLACE(?,' ','')"  # substring
+                    ")"
+                )
+                params += [like, like, like, like]
+
 
 
     addr = args.get("address")
