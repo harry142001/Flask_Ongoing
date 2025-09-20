@@ -105,45 +105,37 @@ def add_filters(sql: str, params: List[Any], args) -> Tuple[str, List[Any]]:
     q = args.get("q")
     if q:
         q_stripped = q.strip()
-        # Detect exact / literal mode: the whole q wrapped in double quotes
-        m = re.fullmatch(r'"(.*)"', q_stripped)
-        if m:
-            # ---------- EXACT (LITERAL) MODE ----------
-            phrase = m.group(1).strip()
-            phrase_clean_postal = clean_postal(phrase)
 
-            # Exact match on broker (case-insensitive)
+        # --- 1. Split into quoted phrases and free text ---
+        quoted_phrases = [m.group(1).strip() for m in re.finditer(r'"(.*?)"', q_stripped)]
+        free_text = re.sub(r'"(.*?)"', " ", q_stripped).strip()
+
+        # --- 2. EXACT groups for quoted phrases ---
+        for phrase in quoted_phrases:
+            if not phrase:
+                continue
+            phrase_clean_postal = clean_postal(phrase)
             sql += (
                 " AND ("
                 " broker = ? COLLATE NOCASE"
-                # If you ALSO want strict exact match on other fields, uncomment any of these:
-                " OR address = ? COLLATE NOCASE"
+                " OR agent = ? COLLATE NOCASE"
                 " OR city = ? COLLATE NOCASE"
                 f" OR {REGION_SQL} = ? COLLATE NOCASE"
-                " OR agent = ? COLLATE NOCASE"
-                # Exact on postal without spaces:
                 " OR REPLACE(postal,' ','') = ?"
                 ")"
             )
-            # Params for the fields you enabled above (order must match the SQL)
-            params.append(phrase)
-            params.append(phrase)  # address
-            params.append(phrase)  # city
-            params.append(phrase)  # region
-            params.append(phrase)  # agent
-            params.append(phrase_clean_postal)  # postal (no spaces)
+            params += [phrase, phrase, phrase, phrase, phrase_clean_postal]
 
-        else:
-            # ---------- KEYWORD MODE (current behavior) ----------
-            terms = [t.strip() for t in re.split(r"[,\s()]+", q) if t.strip()]
-
+        # --- 3. KEYWORD groups for leftover tokens (current behavior) ---
+        if free_text:
+            terms = [t.strip() for t in re.split(r"[,\s()]+", free_text) if t.strip()]
             for t in terms:
                 like = f"%{t}%"
                 token_clean = clean_postal(t)
 
                 # Detect numeric-looking token for lat/lon prefix search
                 is_numberish = bool(re.fullmatch(r"-?\d+(\.\d+)?", t))
-                latlon_like = (t.strip() + "%") if is_numberish else like  # prefix for numbers, substring otherwise
+                latlon_like = (t.strip() + "%") if is_numberish else like
 
                 # Postal patterns
                 is_fsa = bool(re.fullmatch(r"[A-Z]\d[A-Z]", token_clean))
@@ -196,6 +188,7 @@ def add_filters(sql: str, params: List[Any], args) -> Tuple[str, List[Any]]:
                         ")"
                     )
                     params += [like, like, like, like, like, latlon_like, latlon_like, like]
+
 
 
 
