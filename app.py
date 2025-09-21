@@ -110,21 +110,26 @@ def add_filters(sql: str, params: List[Any], args) -> Tuple[str, List[Any]]:
         quoted_phrases = [m.group(1).strip() for m in re.finditer(r'"(.*?)"', q_stripped)]
         free_text = re.sub(r'"(.*?)"', " ", q_stripped).strip()
 
-        # --- 2. EXACT groups for quoted phrases ---
+# --- 2. SUBSTRING groups for quoted phrases (NOT exact equals) ---
         for phrase in quoted_phrases:
             if not phrase:
                 continue
-            phrase_clean_postal = clean_postal(phrase)
+            like = f"%{phrase}%"
+    # treat postal leniently: ignore spaces and allow substring
             sql += (
                 " AND ("
-                " broker = ? COLLATE NOCASE"
-                " OR agent = ? COLLATE NOCASE"
-                " OR city = ? COLLATE NOCASE"
-                f" OR {REGION_SQL} = ? COLLATE NOCASE"
-                " OR REPLACE(postal,' ','') = ?"
+                " address LIKE ? COLLATE NOCASE"
+                " OR city LIKE ? COLLATE NOCASE"
+                f" OR {REGION_SQL} LIKE ? COLLATE NOCASE"
+                " OR agent LIKE ? COLLATE NOCASE"
+                " OR broker LIKE ? COLLATE NOCASE"
+                " OR CAST(latitude AS TEXT) LIKE ?"
+                " OR CAST(longitude AS TEXT) LIKE ?"
+                " OR REPLACE(postal,' ','') LIKE REPLACE(?,' ','')"
                 ")"
             )
-            params += [phrase, phrase, phrase, phrase, phrase_clean_postal]
+            params += [like, like, like, like, like, like, like, like]
+
 
         # --- 3. KEYWORD groups for leftover tokens (current behavior) ---
         if free_text:
