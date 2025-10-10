@@ -38,7 +38,6 @@ def parse_int(v, default=None):
         return default
 
 def _full_address_from_row(r: Dict[str, Any]) -> str:
-    """Build a readable address string using API field names when available."""
     prov = r.get("province") or r.get("state")
     pc   = r.get("postcode") or r.get("postal")
     parts = [r.get("address"), r.get("city"), prov, pc]
@@ -72,20 +71,6 @@ def respond(payload: List[Dict[str, Any]], view: str = "json"):
                 out[_full_address_from_row(r)] = f"{lat},{lon}"
         return Response(json.dumps(out, indent=2), status=200, mimetype="application/json")
 
-    if view == "geojson":
-        fc = {"type": "FeatureCollection", "features": []}
-        for r in payload:
-            lat, lon = r.get("latitude"), r.get("longitude")
-            if lat is None or lon is None:
-                continue
-            # keep all other fields in properties (already normalized)
-            props = {k: v for k, v in r.items() if k not in ("latitude", "longitude")}
-            fc["features"].append({
-                "type": "Feature",
-                "properties": props,
-                "geometry": {"type": "Point", "coordinates": [lon, lat]}
-            })
-        return Response(json.dumps(fc, indent=2), status=200, mimetype="application/json")
 
     # default: list of objects with count
     return Response(
@@ -275,18 +260,7 @@ def list_cities():
 
 @app.get("/api/v1/search")
 def api_search():
-    """
-    One flexible search endpoint for the frontend form.
-
-    Optional query params (new names):
-      q, city, postcode, agent, broker, province,
-      limit (default 50), page (default 1),
-      view=json|list|geojson
-
-    Notes:
-      - DB still uses columns 'postal' and 'state'.
-      - Output is normalized to 'postcode' and 'province'.
-    """
+    
     args = request.args
     view  = args.get("view", "json")
     limit = parse_int(args.get("limit"))
@@ -297,7 +271,7 @@ def api_search():
     params: List[Any] = []
     sql, params = add_filters(sql, params, args)
 
-    # If you do not want ordering, comment out the next line.
+   
     sql += " ORDER BY id DESC"
     if limit:
         sql += " LIMIT ? OFFSET ?"
@@ -319,4 +293,4 @@ def api_search():
 if __name__ == "__main__":
     import os
     port = int(os.environ.get("PORT", 5002))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port)

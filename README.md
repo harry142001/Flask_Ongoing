@@ -91,23 +91,3 @@ curl "http://127.0.0.1:5001/search?broker=Homelife&limit=5"
 curl "http://127.0.0.1:5001/search?postal=L5B&limit=5"
 ```
 
-### 5. Sort by price (ascending)
-
-```bash
-curl "http://127.0.0.1:5001/search?city=Cooksville&sort=price_asc&limit=5"
-```
-
-### 6. Compact map output
-
-```bash
-curl "http://127.0.0.1:5001/search?city=Cooksville&limit=5&format=map"
-```
-
-**Map format response example:**
-
-```json
-{
-  "205 Calverley Trail, Cooksville, ON, L5B 2N1": "43.59,-79.64",
-  "12 Euclid Avenue, Cooksville, ON, L5B 1J6": "43.79,-79.17"
-}
-```
