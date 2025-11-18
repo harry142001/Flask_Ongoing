@@ -2,8 +2,14 @@ from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 import sqlite3, json, re
 from typing import List, Dict, Any, Tuple
+import os
 
-DB_PATH = "Database1.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_DB_PATH = os.path.join(BASE_DIR, "data", "Database1.db")
+
+DB_PATH = os.getenv("DB_PATH", DEFAULT_DB_PATH)
+
+
 TABLE = "properties"
 
 app = Flask(__name__)
@@ -54,12 +60,7 @@ def to_api_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 def respond(payload: List[Dict[str, Any]], view: str = "json"):
-    """
-    Standardize output for frontend:
-      - view=json  (default): { count, items: [objects] }
-      - view=list            : { "Address, City, Province, Postcode": "lat,lon", ... }
-      - view=geojson         : GeoJSON FeatureCollection
-    """
+    
     view = (view or "json").lower()
 
     if view == "list":
