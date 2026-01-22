@@ -289,6 +289,94 @@ def api_search():
         r["formatted_address"] = _full_address_from_row(r)
 
     return respond(rows, view)
+@app.get("/api/v1/summary")
+def api_summary():
+    import pandas as pd
+
+    args = request.args
+
+    # 1) Safety limit (don’t let pandas pull your whole DB accidentally)
+    limit = parse_int(args.get("limit"), 5000)
+
+    # 2) Build SQL using SAME filters as search
+    sql = f"SELECT * FROM {TABLE} WHERE 1=1"
+    params: List[Any] = []
+    sql, params = add_filters(sql, params, args)
+
+    # 3) Apply limit
+    sql += " LIMIT ?"
+    params.append(limit)
+
+    # 4) Fetch rows from SQLite
+    with connect() as con:
+        rows = rows_to_dicts(con.execute(sql, tuple(params)).fetchall())
+
+    # 5) Convert to pandas DataFrame
+    df = pd.DataFrame(rows)
+
+    # 6) If nothing matched, return empty summary
+    if df.empty:
+        return jsonify({"count": 0, "summary": {}, "tops": {}}), 200
+
+    # 7) Normalize postal column (your DB uses 'postal')
+    if "postal" in df.columns:
+        df["postal_clean"] = (
+            df["postal"]
+            .fillna("")
+            .astype(str)
+            .str.upper()
+            .str.replace(" ", "", regex=False)
+        )
+        df["fsa"] = df["postal_clean"].str[:3]
+    else:
+        df["fsa"] = None
+
+    # 8) Coverage metric: has both lat + lon
+    with_latlon = 0
+    if "latitude" in df.columns and "longitude" in df.columns:
+        with_latlon = int(((df["latitude"].notna()) & (df["longitude"].notna())).sum())
+
+    # 9) Top cities
+    top_cities = {}
+    if "city" in df.columns:
+        top_cities = (
+            df["city"]
+            .fillna("")
+            .replace("", pd.NA)
+            .dropna()
+            .value_counts()
+            .head(10)
+            .to_dict()
+        )
+
+    # 10) Top FSAs
+    top_fsa = {}
+    if "fsa" in df.columns:
+        top_fsa = (
+            df["fsa"]
+            .fillna("")
+            .replace("", pd.NA)
+            .dropna()
+            .value_counts()
+            .head(10)
+            .to_dict()
+        )
+
+    # 11) Build response
+    count = int(len(df))
+    summary = {
+        "rows_returned": count,
+        "with_latlon": with_latlon,
+        "pct_with_latlon": float((with_latlon / count) * 100.0) if count else 0.0,
+    }
+
+    tops = {
+        "top_cities": top_cities,
+        "top_fsa": top_fsa,
+    }
+
+    return jsonify({"count": count, "summary": summary, "tops": tops}), 200
+
 
 
 if __name__ == "__main__":
