@@ -3,6 +3,7 @@ from flask_cors import CORS
 import sqlite3, json, re
 from typing import List, Dict, Any, Tuple
 import os
+import pandas as pd
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB_PATH = os.path.join(BASE_DIR, "data", "Database1.db")
@@ -289,94 +290,411 @@ def api_search():
         r["formatted_address"] = _full_address_from_row(r)
 
     return respond(rows, view)
-@app.get("/api/v1/summary")
-def api_summary():
-    import pandas as pd
 
+
+# =====================================================
+# PANDAS POWERED ENDPOINTS
+# =====================================================
+
+@app.get("/api/v1/stats")
+def api_stats():
+    """
+    Returns counts grouped by city, province, FSA, agent, broker.
+    Good for bar charts and pie charts.
+    
+    Usage:
+        /api/v1/stats                     → all stats
+        /api/v1/stats?by=city             → only city counts
+        /api/v1/stats?by=agent            → only agent counts
+        /api/v1/stats?city=Toronto        → stats filtered by city
+    
+    Supports all the same filters as /search (q, city, province, agent, etc.)
+    """
     args = request.args
-
-    # 1) Safety limit (don’t let pandas pull your whole DB accidentally)
-    limit = parse_int(args.get("limit"), 5000)
-
-    # 2) Build SQL using SAME filters as search
+    
+    # Which grouping to return (or "all" for everything)
+    by = args.get("by", "all").lower()
+    limit = parse_int(args.get("limit"), 50000)
+    
+    # Build filtered query
     sql = f"SELECT * FROM {TABLE} WHERE 1=1"
     params: List[Any] = []
     sql, params = add_filters(sql, params, args)
-
-    # 3) Apply limit
     sql += " LIMIT ?"
     params.append(limit)
-
-    # 4) Fetch rows from SQLite
+    
     with connect() as con:
         rows = rows_to_dicts(con.execute(sql, tuple(params)).fetchall())
-
-    # 5) Convert to pandas DataFrame
+    
     df = pd.DataFrame(rows)
-
-    # 6) If nothing matched, return empty summary
+    
     if df.empty:
-        return jsonify({"count": 0, "summary": {}, "tops": {}}), 200
-
-    # 7) Normalize postal column (your DB uses 'postal')
+        return jsonify({"count": 0, "stats": {}}), 200
+    
+    # Add FSA column
     if "postal" in df.columns:
-        df["postal_clean"] = (
+        df["fsa"] = (
             df["postal"]
             .fillna("")
             .astype(str)
             .str.upper()
             .str.replace(" ", "", regex=False)
+            .str[:3]
         )
-        df["fsa"] = df["postal_clean"].str[:3]
+    
+    # Normalize province/state
+    if "state" in df.columns and "province" not in df.columns:
+        df["province"] = df["state"]
+    
+    def get_counts(column):
+        if column not in df.columns:
+            return {}
+        return (
+            df[column]
+            .fillna("")
+            .replace("", pd.NA)
+            .dropna()
+            .value_counts()
+            .to_dict()
+        )
+    
+    stats = {}
+    
+    if by == "all":
+        stats["by_city"] = get_counts("city")
+        stats["by_province"] = get_counts("province")
+        stats["by_fsa"] = get_counts("fsa")
+        stats["by_agent"] = get_counts("agent")
+        stats["by_broker"] = get_counts("broker")
+    elif by in ["city", "province", "fsa", "agent", "broker"]:
+        stats[f"by_{by}"] = get_counts(by)
     else:
-        df["fsa"] = None
+        return jsonify({"error": f"Unknown grouping: {by}"}), 400
+    
+    return jsonify({
+        "count": len(df),
+        "stats": stats
+    }), 200
 
-    # 8) Coverage metric: has both lat + lon
-    with_latlon = 0
-    if "latitude" in df.columns and "longitude" in df.columns:
-        with_latlon = int(((df["latitude"].notna()) & (df["longitude"].notna())).sum())
 
-    # 9) Top cities
-    top_cities = {}
-    if "city" in df.columns:
-        top_cities = (
-            df["city"]
-            .fillna("")
-            .replace("", pd.NA)
-            .dropna()
-            .value_counts()
-            .head(10)
-            .to_dict()
-        )
+@app.get("/api/v1/data-quality")
+def api_data_quality():
+    """
+    Returns data quality report - shows missing/empty values per field.
+    
+    Usage:
+        /api/v1/data-quality              → quality report for all data
+        /api/v1/data-quality?city=Toronto → quality report filtered by city
+    
+    Supports all the same filters as /search
+    """
+    args = request.args
+    limit = parse_int(args.get("limit"), 50000)
+    
+    # Build filtered query
+    sql = f"SELECT * FROM {TABLE} WHERE 1=1"
+    params: List[Any] = []
+    sql, params = add_filters(sql, params, args)
+    sql += " LIMIT ?"
+    params.append(limit)
+    
+    with connect() as con:
+        rows = rows_to_dicts(con.execute(sql, tuple(params)).fetchall())
+    
+    df = pd.DataFrame(rows)
+    
+    if df.empty:
+        return jsonify({"count": 0, "by_field": {}}), 200
+    
+    total = len(df)
+    
+    # Calculate missing/empty for each column
+    quality = {}
+    for col in df.columns:
+        # Count filled values (non-null and non-empty)
+        if df[col].dtype == object:
+            filled = int((df[col].fillna("").astype(str).str.strip() != "").sum())
+        else:
+            filled = int(df[col].notna().sum())
+        
+        missing = total - filled
+        
+        quality[col] = {
+            "total": total,
+            "filled": filled,
+            "missing": missing,
+            "pct_filled": round((filled / total) * 100, 1) if total > 0 else 0,
+            "pct_missing": round((missing / total) * 100, 1) if total > 0 else 0
+        }
+    
+    return jsonify({
+        "count": total,
+        "by_field": quality
+    }), 200
 
-    # 10) Top FSAs
-    top_fsa = {}
-    if "fsa" in df.columns:
-        top_fsa = (
-            df["fsa"]
-            .fillna("")
-            .replace("", pd.NA)
-            .dropna()
-            .value_counts()
-            .head(10)
-            .to_dict()
-        )
 
-    # 11) Build response
-    count = int(len(df))
+@app.get("/api/v1/export/csv")
+def api_export_csv():
+    """
+    Export filtered data as CSV file download.
+    
+    Usage:
+        /api/v1/export/csv                → export all data
+        /api/v1/export/csv?city=Toronto   → export filtered data
+        /api/v1/export/csv?limit=1000     → limit rows
+    
+    Supports all the same filters as /search
+    """
+    args = request.args
+    limit = parse_int(args.get("limit"), 50000)
+    
+    # Build filtered query
+    sql = f"SELECT * FROM {TABLE} WHERE 1=1"
+    params: List[Any] = []
+    sql, params = add_filters(sql, params, args)
+    sql += " LIMIT ?"
+    params.append(limit)
+    
+    with connect() as con:
+        rows = rows_to_dicts(con.execute(sql, tuple(params)).fetchall())
+    
+    df = pd.DataFrame(rows)
+    
+    # Rename columns for API consistency
+    if "state" in df.columns:
+        df = df.rename(columns={"state": "province"})
+    if "postal" in df.columns:
+        df = df.rename(columns={"postal": "postcode"})
+    
+    # Convert to CSV
+    csv_data = df.to_csv(index=False)
+    
+    # Return as downloadable file
+    return Response(
+        csv_data,
+        status=200,
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=export.csv"
+        }
+    )
+
+
+@app.get("/api/v1/duplicates")
+def api_duplicates():
+    """
+    Find duplicate records with detailed analysis.
+    
+    Usage:
+        /api/v1/duplicates                    → all duplicates with summary
+        /api/v1/duplicates?type=true          → complete duplicates (everything matches)
+        /api/v1/duplicates?type=variants      → same property, different price/agent/broker
+        /api/v1/duplicates?type=all           → both (default)
+        /api/v1/duplicates?city=Toronto       → filter by city
+    
+    Supports all the same filters as /search
+    """
+    args = request.args
+    dup_type = args.get("type", "all").lower()  # true, variants, all
+    limit = parse_int(args.get("limit"), 50000)
+    
+    # Build filtered query
+    sql = f"SELECT * FROM {TABLE} WHERE 1=1"
+    params: List[Any] = []
+    sql, params = add_filters(sql, params, args)
+    sql += " LIMIT ?"
+    params.append(limit)
+    
+    with connect() as con:
+        rows = rows_to_dicts(con.execute(sql, tuple(params)).fetchall())
+    
+    df = pd.DataFrame(rows)
+    
+    if df.empty:
+        return jsonify({
+            "total_rows": 0,
+            "summary": {},
+            "duplicates": []
+        }), 200
+    
+    total_rows = len(df)
+    
+    # Normalize columns for comparison
+    df["address_clean"] = df["address"].fillna("").astype(str).str.lower().str.strip()
+    df["city_clean"] = df["city"].fillna("").astype(str).str.lower().str.strip()
+    df["postal_clean"] = df["postal"].fillna("").astype(str).str.upper().str.replace(" ", "", regex=False)
+    
+    # Handle state/province
+    if "state" in df.columns:
+        df["province_clean"] = df["state"].fillna("").astype(str).str.lower().str.strip()
+    elif "province" in df.columns:
+        df["province_clean"] = df["province"].fillna("").astype(str).str.lower().str.strip()
+    else:
+        df["province_clean"] = ""
+    
+    # Property key = address + city + province + postal (identifies unique property)
+    property_keys = ["address_clean", "city_clean", "province_clean", "postal_clean"]
+    
+    # All columns for true duplicate check (including lat/lon)
+    df["price_clean"] = df["price"].fillna("").astype(str).str.strip()
+    df["agent_clean"] = df["agent"].fillna("").astype(str).str.lower().str.strip()
+    df["broker_clean"] = df["broker"].fillna("").astype(str).str.lower().str.strip()
+    df["lat_clean"] = df["latitude"].fillna("").astype(str).str.strip()
+    df["lon_clean"] = df["longitude"].fillna("").astype(str).str.strip()
+    
+    all_keys = property_keys + ["price_clean", "agent_clean", "broker_clean", "lat_clean", "lon_clean"]
+    
+    # --- Calculate summary stats ---
+    
+    # True duplicates: same property + same price + same agent + same broker
+    true_dup_mask = df.duplicated(subset=all_keys, keep='first')
+    true_dup_count = int(true_dup_mask.sum())
+    true_dup_groups = int(df[df.duplicated(subset=all_keys, keep=False)].groupby(all_keys).ngroups) if true_dup_mask.any() else 0
+    
+    # Property duplicates: same address+city+province+postal (may have different price/agent/broker)
+    prop_dup_mask = df.duplicated(subset=property_keys, keep=False)
+    prop_dup_df = df[prop_dup_mask].copy()
+    
+    # Variants: same property but something differs
+    price_variants = 0
+    agent_variants = 0
+    broker_variants = 0
+    
+    if not prop_dup_df.empty:
+        # Group by property and check for variations
+        for _, group in prop_dup_df.groupby(property_keys):
+            if len(group) > 1:
+                if group["price_clean"].nunique() > 1:
+                    price_variants += len(group) - 1
+                if group["agent_clean"].nunique() > 1:
+                    agent_variants += len(group) - 1
+                if group["broker_clean"].nunique() > 1:
+                    broker_variants += len(group) - 1
+    
+    # --- Get duplicate records based on type ---
+    
+    if dup_type == "true":
+        # Only complete duplicates
+        result_df = df[true_dup_mask]
+    elif dup_type == "variants":
+        # Same property but price/agent/broker differs
+        # First get all property duplicates, then exclude true duplicates
+        prop_dup_extras = df.duplicated(subset=property_keys, keep='first')
+        true_dup_extras = df.duplicated(subset=all_keys, keep='first')
+        variant_mask = prop_dup_extras & ~true_dup_extras
+        result_df = df[variant_mask]
+    else:
+        # All: any property that appears more than once (extras only)
+        result_df = df[df.duplicated(subset=property_keys, keep='first')]
+    
+    # Clean up helper columns
+    clean_cols = ["address_clean", "city_clean", "province_clean", "postal_clean", 
+                  "price_clean", "agent_clean", "broker_clean", "lat_clean", "lon_clean"]
+    result_df = result_df.drop(columns=clean_cols, errors='ignore')
+    
+    # Sort by address
+    result_df = result_df.sort_values("address")
+    
+    # Convert to list
+    duplicates = result_df.to_dict(orient="records")
+    duplicates = [to_api_row(r) for r in duplicates]
+    
+    # Build summary
     summary = {
-        "rows_returned": count,
-        "with_latlon": with_latlon,
-        "pct_with_latlon": float((with_latlon / count) * 100.0) if count else 0.0,
+        "true_duplicates": {
+            "count": true_dup_count,
+            "groups": true_dup_groups
+        },
+        "variants": {
+            "price_differs": price_variants,
+            "agent_differs": agent_variants,
+            "broker_differs": broker_variants
+        },
+        "percent_duplicates": round((len(result_df) / total_rows) * 100, 2) if total_rows > 0 else 0
     }
+    
+    return jsonify({
+        "total_rows": total_rows,
+        "returned": len(duplicates),
+        "type": dup_type,
+        "summary": summary,
+        "duplicates": duplicates
+    }), 200
 
-    tops = {
-        "top_cities": top_cities,
-        "top_fsa": top_fsa,
+
+@app.get("/api/v1/export/geojson")
+def api_export_geojson():
+    """
+    Export filtered data as GeoJSON for maps (Leaflet, Mapbox, etc.)
+    
+    Usage:
+        /api/v1/export/geojson                → export all data with coordinates
+        /api/v1/export/geojson?city=Toronto   → export filtered data
+        /api/v1/export/geojson?limit=1000     → limit features
+    
+    Supports all the same filters as /search
+    Only includes records that have both latitude and longitude.
+    """
+    args = request.args
+    limit = parse_int(args.get("limit"), 50000)
+    
+    # Build filtered query - only get records with coordinates
+    sql = f"SELECT * FROM {TABLE} WHERE latitude IS NOT NULL AND longitude IS NOT NULL"
+    params: List[Any] = []
+    sql, params = add_filters(sql, params, args)
+    sql += " LIMIT ?"
+    params.append(limit)
+    
+    with connect() as con:
+        rows = rows_to_dicts(con.execute(sql, tuple(params)).fetchall())
+    
+    # Convert to GeoJSON
+    features = []
+    for row in rows:
+        try:
+            lat = float(row.get("latitude"))
+            lon = float(row.get("longitude"))
+        except (TypeError, ValueError):
+            continue  # Skip if lat/lon can't be converted
+        
+        # Build properties (all fields except lat/lon)
+        properties = {}
+        for key, value in row.items():
+            if key not in ("latitude", "longitude"):
+                # Rename for API consistency
+                if key == "state":
+                    properties["province"] = value
+                elif key == "postal":
+                    properties["postcode"] = value
+                else:
+                    properties[key] = value
+        
+        # Add formatted address
+        properties["formatted_address"] = _full_address_from_row(row)
+        
+        feature = {
+            "type": "Feature",
+            "geometry": {
+                "type": "Point",
+                "coordinates": [lon, lat]  # GeoJSON uses [longitude, latitude]
+            },
+            "properties": properties
+        }
+        features.append(feature)
+    
+    geojson = {
+        "type": "FeatureCollection",
+        "features": features
     }
-
-    return jsonify({"count": count, "summary": summary, "tops": tops}), 200
-
+    
+    return Response(
+        json.dumps(geojson, indent=2),
+        status=200,
+        mimetype="application/geo+json",
+        headers={
+            "Content-Disposition": "attachment; filename=export.geojson"
+        }
+    )
 
 
 if __name__ == "__main__":
