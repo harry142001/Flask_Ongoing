@@ -9,12 +9,14 @@ ENV PYTHONUNBUFFERED=1
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app code and the SQLite DB 
+# Copy app code and the SQLite DBs
 COPY app.py ./ 
-COPY data/Database1.db ./  
+COPY data/Database1.db ./data/
+COPY data/property_details.db ./data/
+
 # App config
 ENV PORT=5002
-ENV DB_PATH=/app/Database1.db   
+ENV DB_PATH=/app/data/Database1.db   
 EXPOSE 5002
 
 # Start the app
