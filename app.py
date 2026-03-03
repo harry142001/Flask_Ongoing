@@ -16,6 +16,67 @@ TABLE = "properties"
 app = Flask(__name__)
 CORS(app)
 
+# =====================================================
+# MEMORY CACHE - Data loaded once on startup
+# =====================================================
+CACHE = {
+    "properties": [],           # All properties from Database1.db
+    "property_details": {},     # Details keyed by address
+    "loaded": False
+}
+
+def load_cache():
+    """
+    Load all data into memory when server starts.
+    This makes the FIRST query fast because data is already in memory.
+    """
+    global CACHE
+    
+    print("=" * 50)
+    print("LOADING DATA INTO MEMORY...")
+    print("=" * 50)
+    
+    # Load main properties
+    try:
+        with connect() as con:
+            rows = con.execute(f"SELECT rowid AS id, * FROM {TABLE}").fetchall()
+            CACHE["properties"] = [dict(r) for r in rows]
+        print(f"Loaded {len(CACHE['properties'])} properties from Database1.db")
+    except Exception as e:
+        print(f"Error loading properties: {e}")
+        CACHE["properties"] = []
+    
+    # Load property details (keyed by address for fast lookup)
+    try:
+        with connect_details() as con:
+            rows = con.execute("SELECT * FROM property_details").fetchall()
+            for r in rows:
+                row_dict = dict(r)
+                address = row_dict.get("address", "").lower().strip()
+                if address:
+                    CACHE["property_details"][address] = row_dict
+        print(f"Loaded {len(CACHE['property_details'])} property details")
+    except Exception as e:
+        print(f"Error loading property details: {e}")
+        CACHE["property_details"] = {}
+    
+    CACHE["loaded"] = True
+    print("=" * 50)
+    print("CACHE READY! Server is now fast")
+    print("=" * 50)
+
+
+def get_cached_properties():
+    """Get all properties from cache"""
+    return CACHE["properties"]
+
+
+def get_cached_details(address: str):
+    """Get property details by address from cache"""
+    if not address:
+        return None
+    return CACHE["property_details"].get(address.lower().strip())
+
 # ---------- Helpers ----------
 def connect():
     con = sqlite3.connect(DB_PATH)
@@ -59,6 +120,63 @@ def to_api_row(row: Dict[str, Any]) -> Dict[str, Any]:
     if "postal" in out:
         out["postcode"] = out.pop("postal")
     return out
+
+
+# =====================================================
+# NESTED DETAILS HELPERS
+# =====================================================
+
+def _clean_details(details_row: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Prepare a details dict for nesting into a search result.
+    - Removes fields that duplicate the parent (address, city, etc.)
+    - Replaces None/null values with "" (empty string)
+    - Parses sales_history JSON string into a list
+    """
+    PARENT_FIELDS = {"address", "city", "province", "state", "postcode", "postal",
+                     "postal_code", "country", "latitude", "longitude", "price",
+                     "agent", "broker", "id"}
+    out = {}
+    for key, value in details_row.items():
+        if key.lower() in PARENT_FIELDS:
+            continue
+        if key == "sales_history" and isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if key == "sales_history" and isinstance(value, list):
+            cleaned_history = []
+            for entry in value:
+                if isinstance(entry, dict):
+                    cleaned_entry = {k: ("" if v is None else v) for k, v in entry.items()}
+                    cleaned_history.append(cleaned_entry)
+                else:
+                    cleaned_history.append(entry)
+            value = cleaned_history if cleaned_history else ""
+        if value is None:
+            value = ""
+        out[key] = value
+    return out
+
+
+def _attach_details(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    For each row, look up property details from cache and attach as
+    a nested "details" object. If no details exist, the row is returned
+    unchanged (no "details" key added).
+    """
+    for r in rows:
+        addr = (r.get("address") or "").lower().strip()
+        if not addr:
+            continue
+        details_row = CACHE["property_details"].get(addr)
+        if details_row:
+            cleaned = _clean_details(details_row)
+            if cleaned:
+                r["details"] = cleaned
+    return rows
+
 
 def respond(payload: List[Dict[str, Any]], view: str = "json"):
     
@@ -252,23 +370,44 @@ def api_search():
     limit = parse_int(args.get("limit"))
     page  = max(1, parse_int(args.get("page"), 1))
     offset = (page - 1) * (limit or 0)
+    
+    include_details = args.get("details", "true").lower() != "false"
+    
+    # Check if any filters are applied
+    has_filters = any([
+        args.get("q"), args.get("address"), args.get("city"),
+        args.get("agent"), args.get("broker"), args.get("postcode"),
+        args.get("province"), args.get("state"), args.get("latitude"),
+        args.get("longitude")
+    ])
+    
+    # If no filters and cache is loaded, use cache
+    if not has_filters and CACHE["loaded"]:
+        rows_db = CACHE["properties"].copy()
+        # Apply limit/offset
+        if limit:
+            rows_db = rows_db[offset:offset + limit]
+    else:
+        # Use database query with filters
+        sql = f"SELECT rowid AS id, * FROM {TABLE} WHERE 1=1"
+        params: List[Any] = []
+        sql, params = add_filters(sql, params, args)
 
-    sql = f"SELECT rowid AS id, * FROM {TABLE} WHERE 1=1"
-    params: List[Any] = []
-    sql, params = add_filters(sql, params, args)
+        sql += " ORDER BY id DESC"
+        if limit:
+            sql += " LIMIT ? OFFSET ?"
+            params += [limit, offset]
 
-    sql += " ORDER BY id DESC"
-    if limit:
-        sql += " LIMIT ? OFFSET ?"
-        params += [limit, offset]
-
-    with connect() as con:
-        rows_db = rows_to_dicts(con.execute(sql, tuple(params)).fetchall())
+        with connect() as con:
+            rows_db = rows_to_dicts(con.execute(sql, tuple(params)).fetchall())
 
     rows = [to_api_row(r) for r in rows_db]
 
     for r in rows:
         r["formatted_address"] = _full_address_from_row(r)
+
+    if include_details and CACHE["loaded"]:
+        rows = _attach_details(rows)
 
     return respond(rows, view)
 
@@ -634,9 +773,9 @@ def api_recent():
     Returns recently added properties (newest first).
     
     Usage:
-        /api/v1/recent                → latest 50 properties
-        /api/v1/recent?limit=100      → latest 100 properties
-        /api/v1/recent?city=Toronto   → latest properties in Toronto
+        /api/v1/recent                -> latest 50 properties
+        /api/v1/recent?limit=100      -> latest 100 properties
+        /api/v1/recent?city=Toronto   -> latest properties in Toronto
     """
     args = request.args
     limit = parse_int(args.get("limit"), 50)
@@ -669,12 +808,13 @@ def api_search_clean():
     Keeps only unique records - no exact copies.
     
     Usage:
-        /api/v1/search/clean                    → all unique properties
-        /api/v1/search/clean?city=Toronto       → unique properties in Toronto
-        /api/v1/search/clean?agent=John         → unique properties by agent
-        /api/v1/search/clean?limit=1000         → limit results
-        /api/v1/search/clean?view=list          → summary format (address: lat,lon)
-        /api/v1/search/clean?view=details       → full details (default)
+        /api/v1/search/clean                    -> all unique properties
+        /api/v1/search/clean?city=Toronto       -> unique properties in Toronto
+        /api/v1/search/clean?agent=John         -> unique properties by agent
+        /api/v1/search/clean?limit=1000         -> limit results
+        /api/v1/search/clean?view=list          -> summary format (address: lat,lon)
+        /api/v1/search/clean?view=details       -> full details (default)
+        /api/v1/search/clean?details=false      -> omit nested property details
     
     Note: True duplicates = exact match on address, city, province, postal,
           price, agent, broker, latitude, longitude
@@ -682,6 +822,8 @@ def api_search_clean():
     args = request.args
     limit = parse_int(args.get("limit"), 50000)
     view = (args.get("view") or "details").lower()
+    
+    include_details = args.get("details", "true").lower() != "false"
     
     sql = f"SELECT rowid AS id, * FROM {TABLE} WHERE 1=1"
     params: List[Any] = []
@@ -732,6 +874,9 @@ def api_search_clean():
     for r in rows_clean:
         r["formatted_address"] = _full_address_from_row(r)
     
+    if include_details and CACHE["loaded"]:
+        rows_clean = _attach_details(rows_clean)
+    
     duplicates_removed = original_count - len(rows_clean)
     
     # Handle view=list (summary format)
@@ -773,13 +918,13 @@ def api_property_details():
     Query detailed property information (bedrooms, bathrooms, lot size, etc.)
     
     Usage:
-        /api/v1/property/details                    → all properties
-        /api/v1/property/details?address=Clark      → search by address
-        /api/v1/property/details?city=Toronto       → filter by city
-        /api/v1/property/details?pin=065020114      → search by PIN
-        /api/v1/property/details?bedrooms=3         → filter by bedrooms
-        /api/v1/property/details?min_value=500000   → min assessed value
-        /api/v1/property/details?max_value=1000000  → max assessed value
+        /api/v1/property/details                    -> all properties
+        /api/v1/property/details?address=Clark      -> search by address
+        /api/v1/property/details?city=Toronto       -> filter by city
+        /api/v1/property/details?pin=065020114      -> search by PIN
+        /api/v1/property/details?bedrooms=3         -> filter by bedrooms
+        /api/v1/property/details?min_value=500000   -> min assessed value
+        /api/v1/property/details?max_value=1000000  -> max assessed value
     """
     args = request.args
     limit = parse_int(args.get("limit"), 100)
@@ -878,6 +1023,32 @@ def api_property_details():
         )
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# =====================================================
+# LOAD CACHE ON STARTUP
+# =====================================================
+
+def create_indexes():
+    """Create database indexes for faster filtered queries"""
+    print("Creating database indexes...")
+    
+    try:
+        with connect() as con:
+            con.execute("CREATE INDEX IF NOT EXISTS idx_city ON properties(city)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_agent ON properties(agent)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_broker ON properties(broker)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_postal ON properties(postal)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_address ON properties(address)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_state ON properties(state)")
+        print("Database indexes created!")
+    except Exception as e:
+        print(f"Error creating indexes: {e}")
+
+
+# Run on startup
+create_indexes()  # First: create indexes for fast filtered queries
+load_cache()      # Then: load data into memory
 
 
 if __name__ == "__main__":
