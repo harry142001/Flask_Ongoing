@@ -119,6 +119,12 @@ def to_api_row(row: Dict[str, Any]) -> Dict[str, Any]:
         out["province"] = out.pop("state")
     if "postal" in out:
         out["postcode"] = out.pop("postal")
+    # Clean NaN values - replace with empty string
+    for key, value in out.items():
+        if value != value:  # NaN check (NaN != NaN is True)
+            out[key] = ""
+        elif isinstance(value, str) and value.strip().lower() == "nan":
+            out[key] = ""
     return out
 
 
@@ -406,6 +412,7 @@ def api_search():
     for r in rows:
         r["formatted_address"] = _full_address_from_row(r)
 
+    rows.sort(key=lambda r: r.get("formatted_address", "").lower())
     if include_details and CACHE["loaded"]:
         rows = _attach_details(rows)
 
@@ -873,6 +880,7 @@ def api_search_clean():
     
     for r in rows_clean:
         r["formatted_address"] = _full_address_from_row(r)
+    rows_clean.sort(key=lambda r: r.get("formatted_address", "").lower())
     
     if include_details and CACHE["loaded"]:
         rows_clean = _attach_details(rows_clean)
