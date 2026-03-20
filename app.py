@@ -51,37 +51,7 @@ COMPARABLE_SCHEMA = {
     "year_built": "",
 }
 
-EMPTY_DETAILS = {
-    "pin": "",
-    "arn": "",
-    "land_registry_office": "",
-    "registration_type": "",
-    "ownership_type": "",
-    "owner_name": "",
-    "area_sqft": "",
-    "area_acres": "",
-    "perimeter_ft": "",
-    "frontage_ft": "",
-    "depth_ft": "",
-    "assessed_value": "",
-    "valuation_date": "",
-    "property_code": "",
-    "property_description": "",
-    "year_built": "",
-    "bedrooms": "",
-    "full_bathrooms": "",
-    "half_bathrooms": "",
-    "storeys": "",
-    "fireplace_total": "",
-    "garage_type": "",
-    "garage_spaces": "",
-    "indoor_pool": "",
-    "outdoor_pool": "",
-    "zoning": "",
-    "sales_history": [],
-    "comparables": [],
-    "notes": "",
-}
+
 
 
 def connect():
@@ -106,9 +76,10 @@ REGION_SQL = (
     else ("province" if HAS_PROVINCE else "state")
 )
 
-
 def load_cache():
     global CACHE
+    log.info("Using DB path: %s", DB_PATH)
+    log.info("BASE_DIR: %s", BASE_DIR)
     log.info("Loading data into memory...")
 
     try:
@@ -121,6 +92,10 @@ def load_cache():
         CACHE["properties"] = []
 
     try:
+        main_addrs = {
+            (r.get("address") or "").lower().strip()
+            for r in CACHE["properties"]
+        }
         with connect_details() as con:
             rows = con.execute("SELECT * FROM property_details").fetchall()
             for r in rows:
@@ -128,6 +103,21 @@ def load_cache():
                 addr = d.get("address", "").lower().strip()
                 if addr:
                     CACHE["property_details"][addr] = d
+                    # If not in main DB, add as a standalone record
+                    if addr not in main_addrs:
+                        synthetic = {
+                            "id": None,
+                            "address": d.get("address", ""),
+                            "city": d.get("city", ""),
+                            "agent": "",
+                            "broker": "",
+                            "price": "",
+                            "latitude": d.get("latitude", ""),
+                            "longitude": d.get("longitude", ""),
+                            "province": d.get("province", "") or d.get("state", ""),
+                            "postcode": d.get("postal_code", "") or d.get("postcode", "") or d.get("postal", ""),
+                        }
+                        CACHE["properties"].append(synthetic)
         log.info("Loaded %d property details", len(CACHE["property_details"]))
     except Exception as e:
         log.error("Failed to load property details: %s", e)
@@ -203,9 +193,9 @@ def _clean_details(row: Dict[str, Any]) -> Dict[str, Any]:
     skip = {
         "address", "city", "province", "state", "postcode", "postal",
         "postal_code", "country", "latitude", "longitude", "price",
-        "agent", "broker", "id",
+        "agent", "broker", "id", "notes", "comparables",  # exclude both
     }
-    json_fields = {"sales_history", "comparables"}
+    json_fields = {"sales_history"}
     out = {}
 
     for key, value in row.items():
@@ -217,11 +207,6 @@ def _clean_details(row: Dict[str, Any]) -> Dict[str, Any]:
             value = ""
         out[key] = value
 
-    if not out.get("comparables"):
-        out["comparables"] = [copy.deepcopy(COMPARABLE_SCHEMA)]
-    if "notes" not in out or out["notes"] is None:
-        out["notes"] = ""
-
     return out
 
 
@@ -230,13 +215,15 @@ def _attach_details(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         addr = (r.get("address") or "").lower().strip()
         detail_row = CACHE["property_details"].get(addr) if addr else None
         if detail_row:
-            r["details"] = _clean_details(detail_row)
-        else:
-            details = copy.deepcopy(EMPTY_DETAILS)
-            details["comparables"] = [copy.deepcopy(COMPARABLE_SCHEMA)]
-            r["details"] = details
+            cleaned = _clean_details(detail_row)
+            r["details"] = cleaned
+            # comparables at top level
+            raw_comp = detail_row.get("comparables")
+            comparables = _parse_json_field(raw_comp, "comparables")
+            if not comparables:
+                comparables = [copy.deepcopy(COMPARABLE_SCHEMA)]
+            r["comparables"] = comparables
     return rows
-
 
 def respond(payload: List[Dict[str, Any]], view: str = "json"):
     if view == "list":
@@ -395,6 +382,7 @@ def api_search():
     if include_details and CACHE["loaded"]:
         rows = _attach_details(rows)
 
+    log.info("Cache size: %d, rows_db: %d, rows after transform: %d", len(CACHE["properties"]), len(rows_db), len(rows))
     return respond(rows, view)
 
 
