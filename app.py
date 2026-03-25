@@ -26,7 +26,17 @@ CACHE: Dict[str, Any] = {
     "property_details": {},
     "loaded": False,
 }
+MOCK_OVERRIDES_PATH = os.path.join(BASE_DIR, "mock_overrides.json")
 
+def load_mock_overrides():
+    if os.path.exists(MOCK_OVERRIDES_PATH):
+        with open(MOCK_OVERRIDES_PATH, "r") as f:
+            log.info("Loaded mock overrides from %s", MOCK_OVERRIDES_PATH)
+            return json.load(f)
+    log.info("No mock_overrides.json found, skipping")
+    return {}
+
+MOCK_OVERRIDES = load_mock_overrides()
 # MPAC comparable field schema — values populated later
 COMPARABLE_SCHEMA = {
     "property_location": "",
@@ -208,7 +218,27 @@ def _clean_details(row: Dict[str, Any]) -> Dict[str, Any]:
         out[key] = value
 
     return out
+def _apply_mock_overrides(record: Dict[str, Any]) -> Dict[str, Any]:
+    # Try matching by PIN first
+    pin = (record.get("details") or {}).get("pin", "")
+    if pin and pin in MOCK_OVERRIDES:
+        record["comparables"] = MOCK_OVERRIDES[pin]["comparables"]
+        return record
 
+    # Fall back to composite key for records with no PIN
+    def normalize(s):
+        return (s or "").strip().lower()
+
+    address = normalize(record.get("address"))
+    city = normalize(record.get("city"))
+    province = normalize(record.get("province"))
+
+    composite = f"{address}|{city}|{province}"
+
+    if composite in MOCK_OVERRIDES:
+        record["comparables"] = MOCK_OVERRIDES[composite]["comparables"]
+
+    return record
 
 def _attach_details(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for r in rows:
@@ -223,6 +253,10 @@ def _attach_details(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             if not comparables:
                 comparables = [copy.deepcopy(COMPARABLE_SCHEMA)]
             r["comparables"] = comparables
+
+        # ← ADD THIS: override comparables from mock file if match found
+        r = _apply_mock_overrides(r)
+
     return rows
 
 def respond(payload: List[Dict[str, Any]], view: str = "json"):
