@@ -20,7 +20,7 @@ for row in con2.execute('SELECT LOWER(TRIM(address)) FROM property_details').fet
     existing.add(row[0])
 
 rows = con1.execute("""
-    SELECT DISTINCT address, city, state, postal
+    SELECT address, city, state, postal
     FROM properties
     WHERE address IS NOT NULL
     AND address != ''
@@ -28,10 +28,8 @@ rows = con1.execute("""
     AND address NOT LIKE '%-%'
     AND city IS NOT NULL
     AND postal IS NOT NULL
-    GROUP BY city
-    LIMIT 100
+    LIMIT 500
 """).fetchall()
-
 count = 0
 new_addresses = []
 for r in rows:

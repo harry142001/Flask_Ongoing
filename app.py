@@ -61,6 +61,13 @@ COMPARABLE_SCHEMA = {
     "year_built": "",
 }
 
+def format_currency(value):
+    if value is None or value == "":
+        return ""
+    try:
+        return "${:,.0f}".format(float(str(value).replace(",", "").replace("$", "")))
+    except (ValueError, TypeError):
+        return str(value)
 
 
 
@@ -191,13 +198,20 @@ def _parse_json_field(value, field_name: str):
             log.warning("Could not parse JSON for field '%s'", field_name)
             return []
     if isinstance(value, list):
-        return [
-            {k: ("" if v is None else v) for k, v in e.items()}
-            if isinstance(e, dict) else e
-            for e in value
-        ]
+        result = []
+        for e in value:
+            if isinstance(e, dict):
+                cleaned = {k: ("" if v is None else v) for k, v in e.items()}
+                if "compsaleamount" in cleaned and cleaned["compsaleamount"]:
+                    cleaned["compsaleamount"] = format_currency(cleaned["compsaleamount"])
+                # ADD THIS
+                if "price" in cleaned and cleaned["price"] != "":
+                    cleaned["price"] = format_currency(cleaned["price"])
+                result.append(cleaned)
+            else:
+                result.append(e)
+        return result
     return []
-
 
 def _clean_details(row: Dict[str, Any]) -> Dict[str, Any]:
     skip = {
@@ -215,6 +229,8 @@ def _clean_details(row: Dict[str, Any]) -> Dict[str, Any]:
             value = _parse_json_field(value, key)
         elif value is None:
             value = ""
+        if key == "assessed_value" and value:
+            value = format_currency(value)
         out[key] = value
 
     return out
@@ -247,15 +263,18 @@ def _attach_details(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if detail_row:
             cleaned = _clean_details(detail_row)
             r["details"] = cleaned
-            # comparables at top level
             raw_comp = detail_row.get("comparables")
             comparables = _parse_json_field(raw_comp, "comparables")
             if not comparables:
                 comparables = [copy.deepcopy(COMPARABLE_SCHEMA)]
             r["comparables"] = comparables
 
-        # ← ADD THIS: override comparables from mock file if match found
         r = _apply_mock_overrides(r)
+
+        # ADD THIS — format after override so mock data is also formatted
+        for comp in r.get("comparables", []):
+            if isinstance(comp, dict) and comp.get("compsaleamount"):
+                comp["compsaleamount"] = format_currency(comp["compsaleamount"])
 
     return rows
 
@@ -477,6 +496,7 @@ def api_search_clean():
     dedup_keys = ["address_clean", "city_clean", "province_clean", "postal_clean",
                   "price_clean", "agent_clean", "broker_clean", "lat_clean", "lon_clean"]
 
+    df = df.sort_values("date_added", ascending=False, na_position="last")
     df = df.drop_duplicates(subset=dedup_keys, keep="first")
     df = df.drop(columns=dedup_keys, errors="ignore")
 
@@ -505,6 +525,7 @@ def api_search_clean():
         status=200,
         mimetype="application/json",
     )
+
 
 
 @app.get("/api/v1/stats")
