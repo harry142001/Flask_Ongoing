@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py ./ 
 COPY data/Database1.db ./data/
 COPY data/property_details.db ./data/
+COPY mock_overrides.json .      
 
 # App config
 ENV PORT=5002
