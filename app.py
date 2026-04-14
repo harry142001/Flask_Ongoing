@@ -383,7 +383,26 @@ def add_filters(sql: str, params: List[Any], args) -> Tuple[str, List[Any]]:
         sql += f" AND UPPER({REGION_SQL}) LIKE UPPER(?)"
         params.append(f"{region.strip()}%")
 
+    min_price = args.get("min_price")
+    if min_price:
+        try:
+            sql += " AND price IS NOT NULL AND price != '' AND CAST(REPLACE(REPLACE(REPLACE(price, '$', ''), ',', ''), ' ', '') AS REAL) >= ?"
+            params.append(float(min_price))
+        except ValueError:
+            pass
+
+    max_price = args.get("max_price")
+    if max_price:
+        try:
+            sql += " AND price IS NOT NULL AND price != '' AND CAST(REPLACE(REPLACE(REPLACE(price, '$', ''), ',', ''), ' ', '') AS REAL) <= ?"
+            params.append(float(max_price))
+        except ValueError:
+            pass
+
+
     return sql, params
+
+    
 
 
 @app.get("/health")
@@ -409,7 +428,7 @@ def api_search():
     offset = (page - 1) * (limit or 0)
     include_details = args.get("details", "true").lower() != "false"
 
-    filter_keys = ("q", "address", "city", "agent", "broker", "postcode", "province", "state", "latitude", "longitude")
+    filter_keys = ("q", "address", "city", "agent", "broker", "postcode", "province", "state", "latitude", "longitude", "min_price", "max_price")
     has_filters = any(args.get(k) for k in filter_keys)
 
     if not has_filters and CACHE["loaded"]:
