@@ -9,15 +9,23 @@ ENV PYTHONUNBUFFERED=1
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app code and the SQLite DBs
-COPY app.py ./ 
+# Copy app code
+COPY app.py ./
+COPY config.py ./
+COPY database.py ./
+COPY cache.py ./
+COPY utils.py ./
+COPY routes/ ./routes/
+COPY mock_overrides.json ./
+
+# Copy the SQLite DBs
 COPY data/Database1.db ./data/
 COPY data/property_details.db ./data/
-COPY mock_overrides.json .      
 
 # App config
 ENV PORT=5002
-ENV DB_PATH=/app/data/Database1.db   
+ENV DB_PATH=/app/data/Database1.db
+ENV DETAILS_DB_PATH=/app/data/property_details.db
 EXPOSE 5002
 
 # Start the app

@@ -1,0 +1,25 @@
+# Environment & secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Data files (large, not for version control)
+data/*.db
+data/*.sqbpro
+
+# Operational state
+data/sent_addresses.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
