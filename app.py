@@ -13,6 +13,7 @@ from routes.export import export_bp
 from routes.meta import meta_bp
 from routes.search import search_bp
 
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
 app = Flask(__name__)
@@ -25,6 +26,12 @@ app.register_blueprint(search_bp)
 app.register_blueprint(details_bp)
 app.register_blueprint(export_bp)
 app.register_blueprint(analytics_bp)
+
+from flask import send_from_directory
+
+@app.route("/analyst")
+def analyst():
+    return send_from_directory(".", "curbside_ai_analyst_v6.html")
 
 create_indexes()
 load_cache()

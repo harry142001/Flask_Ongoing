@@ -1,4 +1,0 @@
-flask
-flask-cors
-gunicorn==22.0.0
-pandas

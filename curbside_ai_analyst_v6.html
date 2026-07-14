@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Curbside — AI Market Analyst</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0e0f11;
+    --surface: #16181c;
+    --surface2: #1e2128;
+    --border: rgba(255,255,255,0.07);
+    --border2: rgba(255,255,255,0.12);
+    --gold: #c9a84c;
+    --gold-dim: rgba(201,168,76,0.15);
+    --text: #f0ede8;
+    --text-muted: #8a8680;
+    --text-dim: #555250;
+    --green: #4ade80;
+    --red: #f87171;
+    --blue: #60a5fa;
+  }
+
+  body {
+    font-family: 'DM Sans', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* TOP BAR */
+  #topbar {
+    display: flex;
+    align-items: center;
+    padding: 0 28px;
+    height: 56px;
+    border-bottom: 0.5px solid var(--border);
+    gap: 12px;
+    flex-shrink: 0;
+    background: var(--bg);
+  }
+
+  .logo-word {
+    font-family: 'DM Serif Display', serif;
+    font-size: 20px;
+    color: var(--gold);
+    letter-spacing: 0.02em;
+  }
+
+  .logo-sep {
+    width: 1px;
+    height: 18px;
+    background: var(--border2);
+    margin: 0 4px;
+  }
+
+  .logo-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 300;
+  }
+
+  #status-pill {
+    margin-left: auto;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12px;
+    color: var(--text-muted);
+    background: var(--surface);
+    border: 0.5px solid var(--border);
+    padding: 5px 12px;
+    border-radius: 20px;
+  }
+
+  .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #f59e0b;
+    flex-shrink: 0;
+    transition: background 0.3s;
+  }
+  .dot.ok { background: var(--green); }
+  .dot.err { background: var(--red); }
+
+  /* STATS STRIP */
+  #stats-strip {
+    display: flex;
+    gap: 0;
+    border-bottom: 0.5px solid var(--border);
+    flex-shrink: 0;
+    overflow: hidden;
+    max-height: 0;
+    transition: max-height 0.4s ease;
+  }
+  #stats-strip.visible { max-height: 80px; }
+
+  .stat-card {
+    flex: 1;
+    padding: 12px 20px;
+    border-right: 0.5px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .stat-card:last-child { border-right: none; }
+
+  .stat-label {
+    font-size: 10px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 500;
+  }
+
+  .stat-value {
+    font-family: 'DM Serif Display', serif;
+    font-size: 20px;
+    color: var(--text);
+    line-height: 1;
+  }
+
+  .stat-sub {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+
+  .up { color: var(--red); }
+  .down { color: var(--green); }
+
+  /* MAIN LAYOUT */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* SIDEBAR */
+  #sidebar {
+    width: 220px;
+    border-right: 0.5px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow-y: auto;
+    padding: 16px 0;
+  }
+
+  .sidebar-section {
+    padding: 0 16px;
+    margin-bottom: 20px;
+  }
+
+  .sidebar-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-dim);
+    font-weight: 500;
+    margin-bottom: 8px;
+  }
+
+  .sidebar-chip {
+    display: block;
+    width: 100%;
+    text-align: left;
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    line-height: 1.4;
+    transition: background 0.15s, color 0.15s;
+    font-family: 'DM Sans', sans-serif;
+    margin-bottom: 2px;
+  }
+  .sidebar-chip:hover {
+    background: var(--surface2);
+    color: var(--text);
+  }
+  .sidebar-chip.active {
+    background: var(--gold-dim);
+    color: var(--gold);
+  }
+
+  /* CHAT */
+  #chat-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 28px 36px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--surface2) transparent;
+  }
+
+  .msg-row {
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    animation: fadein 0.25s ease;
+  }
+
+  @keyframes fadein {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .msg-row.user { flex-direction: row-reverse; }
+
+  .avatar {
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px;
+    flex-shrink: 0;
+    font-weight: 500;
+  }
+
+  .avatar.bot {
+    background: var(--gold-dim);
+    color: var(--gold);
+    border: 0.5px solid rgba(201,168,76,0.3);
+    font-family: 'DM Serif Display', serif;
+    font-size: 14px;
+  }
+
+  .avatar.user {
+    background: var(--surface2);
+    color: var(--text-muted);
+    border: 0.5px solid var(--border2);
+  }
+
+  .bubble {
+    max-width: 72%;
+    padding: 12px 16px;
+    border-radius: 4px 16px 16px 16px;
+    font-size: 14px;
+    line-height: 1.65;
+    white-space: pre-wrap;
+  }
+
+  .msg-row.user .bubble {
+    border-radius: 16px 4px 16px 16px;
+    background: var(--surface2);
+    color: var(--text);
+    border: 0.5px solid var(--border2);
+  }
+
+  .msg-row.bot .bubble {
+    background: var(--surface);
+    color: var(--text);
+    border: 0.5px solid var(--border);
+  }
+
+  .bubble.thinking {
+    color: var(--text-dim);
+    font-style: italic;
+  }
+
+  .typing-dots {
+    display: inline-flex;
+    gap: 4px;
+    align-items: center;
+    height: 18px;
+  }
+  .typing-dots span {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    animation: blink 1.2s infinite;
+  }
+  .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes blink {
+    0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+    40% { opacity: 1; transform: scale(1); }
+  }
+
+  /* INPUT */
+  #input-area {
+    padding: 16px 28px 20px;
+    border-top: 0.5px solid var(--border);
+    flex-shrink: 0;
+  }
+
+  #input-wrap {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    background: var(--surface);
+    border: 0.5px solid var(--border2);
+    border-radius: 12px;
+    padding: 10px 14px;
+    transition: border-color 0.2s;
+  }
+  #input-wrap:focus-within { border-color: var(--gold); }
+
+  #user-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    font-size: 14px;
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    resize: none;
+    line-height: 1.5;
+    max-height: 120px;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  #user-input::placeholder { color: var(--text-dim); }
+
+  #send-btn {
+    background: var(--gold);
+    border: none;
+    border-radius: 8px;
+    width: 34px; height: 34px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+    flex-shrink: 0;
+  }
+  #send-btn:hover { opacity: 0.88; }
+  #send-btn:active { transform: scale(0.95); }
+  #send-btn:disabled { opacity: 0.25; cursor: not-allowed; }
+
+  #send-btn svg { width: 16px; height: 16px; fill: #1a1208; }
+
+  .hint { font-size: 11px; color: var(--text-dim); text-align: center; margin-top: 8px; }
+
+  /* CONFIG MODAL */
+  #config-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100;
+  }
+  #config-box {
+    background: var(--surface);
+    border: 0.5px solid var(--border2);
+    border-radius: 16px;
+    padding: 32px;
+    width: 480px;
+    max-width: 90vw;
+  }
+  #config-box h2 {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+    color: var(--gold);
+    margin-bottom: 6px;
+  }
+  #config-box p { font-size: 13px; color: var(--text-muted); margin-bottom: 20px; line-height: 1.6; }
+  .cfg-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); margin-bottom: 6px; font-weight: 500; }
+  .cfg-input {
+    width: 100%; padding: 10px 14px;
+    background: var(--bg); border: 0.5px solid var(--border2);
+    border-radius: 8px; color: var(--text);
+    font-size: 13px; font-family: 'DM Sans', sans-serif;
+    outline: none; margin-bottom: 16px;
+  }
+  .cfg-input:focus { border-color: var(--gold); }
+  .cfg-btn {
+    width: 100%; padding: 12px;
+    background: var(--gold); border: none;
+    border-radius: 8px; color: #1a1208;
+    font-size: 14px; font-weight: 500;
+    cursor: pointer; font-family: 'DM Sans', sans-serif;
+    transition: opacity 0.2s;
+  }
+  .cfg-btn:hover { opacity: 0.88; }
+  .cfg-note { font-size: 11px; color: var(--text-dim); margin-top: 12px; text-align: center; }
+
+  .retry-btn {
+    display: inline-block; margin-top: 10px;
+    font-size: 12px; color: var(--gold);
+    background: var(--gold-dim); border: 0.5px solid rgba(201,168,76,0.3);
+    padding: 6px 14px; border-radius: 20px; cursor: pointer;
+    transition: background 0.15s;
+  }
+  .retry-btn:hover { background: rgba(201,168,76,0.25); }
+</style>
+</head>
+<body>
+
+<!-- CONFIG MODAL -->
+<div id="config-overlay">
+  <div id="config-box">
+    <h2>Curbside</h2>
+    <p>AI Market Analyst — powered by your live property database. Enter your API details to get started.</p>
+    <div class="cfg-label">Flask API Base URL</div>
+    <input class="cfg-input" id="cfg-api" type="text" value="http://localhost:5002/api/v1" placeholder="https://your-api.azurecontainerapps.io/api/v1" />
+    <div class="cfg-label">Anthropic API Key</div>
+    <input class="cfg-input" id="cfg-key" type="password" placeholder="sk-ant-..." />
+    <button class="cfg-btn" onclick="startApp()">Connect & Launch →</button>
+    <p class="cfg-note">Your API key stays on your machine and is never sent anywhere except Anthropic.</p>
+  </div>
+</div>
+
+<!-- TOP BAR -->
+<div id="topbar">
+  <span class="logo-word">Curbside</span>
+  <div class="logo-sep"></div>
+  <span class="logo-sub">AI Market Analyst</span>
+  <div id="status-pill">
+    <span class="dot" id="dot"></span>
+    <span id="slbl">Connecting...</span>
+  </div>
+</div>
+
+<!-- STATS STRIP -->
+<div id="stats-strip">
+  <div class="stat-card">
+    <div class="stat-label">Total Listings</div>
+    <div class="stat-value" id="s-total">—</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">New This Week</div>
+    <div class="stat-value" id="s-week">—</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Avg Price (Overall)</div>
+    <div class="stat-value" id="s-avg">—</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">This Week Avg</div>
+    <div class="stat-value" id="s-wavg">—</div>
+    <div class="stat-sub" id="s-trend"></div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Price Range</div>
+    <div class="stat-value" style="font-size:13px;padding-top:4px" id="s-range">—</div>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div id="main">
+
+  <!-- SIDEBAR -->
+  <div id="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-title">Quick Questions</div>
+      <button class="sidebar-chip" onclick="ask(this)">What's the avg price in Toronto?</button>
+      <button class="sidebar-chip" onclick="ask(this)">Which FSAs are most active?</button>
+      <button class="sidebar-chip" onclick="ask(this)">Is $750k good for Mississauga?</button>
+      <button class="sidebar-chip" onclick="ask(this)">Compare Toronto vs Mississauga</button>
+      <button class="sidebar-chip" onclick="ask(this)">Most expensive listings this week</button>
+      <button class="sidebar-chip" onclick="ask(this)">Most affordable listings</button>
+      <button class="sidebar-chip" onclick="ask(this)">How many new listings this week?</button>
+      <button class="sidebar-chip" onclick="ask(this)">Which area has the best value?</button>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">Price Analysis</div>
+      <button class="sidebar-chip" onclick="ask(this)">Price trend this week vs last week</button>
+      <button class="sidebar-chip" onclick="ask(this)">What's the cheapest FSA?</button>
+      <button class="sidebar-chip" onclick="ask(this)">Top 5 highest priced areas</button>
+    </div>
+    <div class="sidebar-section">
+      <div class="sidebar-title">Market Health</div>
+      <button class="sidebar-chip" onclick="ask(this)">Is this a buyer's or seller's market?</button>
+      <button class="sidebar-chip" onclick="ask(this)">Give me a full market summary</button>
+      <button class="sidebar-chip" onclick="ask(this)">What should a buyer know right now?</button>
+    </div>
+  </div>
+
+  <!-- CHAT -->
+  <div id="chat-area">
+    <div id="messages"></div>
+    <div id="input-area">
+      <div id="input-wrap">
+        <textarea id="user-input" rows="1" placeholder="Ask anything about the Toronto & Mississauga market..."></textarea>
+        <button id="send-btn" disabled onclick="send()">
+          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg>
+        </button>
+      </div>
+      <div class="hint">Press Enter to send · Shift+Enter for new line</div>
+    </div>
+  </div>
+</div>
+
+<script>
+let API_BASE = "";
+let API_KEY = "";
+let mktData = null;
+let busy = false;
+
+const msgsEl = document.getElementById("messages");
+const inputEl = document.getElementById("user-input");
+const sendBtn = document.getElementById("send-btn");
+const dotEl = document.getElementById("dot");
+const slblEl = document.getElementById("slbl");
+
+function setStatus(state, label) {
+  dotEl.className = "dot" + (state === "ok" ? " ok" : state === "err" ? " err" : "");
+  slblEl.textContent = label;
+}
+
+function addMsg(role, content, isTyping) {
+  const row = document.createElement("div");
+  row.className = "msg-row " + role;
+
+  const av = document.createElement("div");
+  av.className = "avatar " + role;
+  av.textContent = role === "bot" ? "C" : "You".slice(0,2);
+
+  const bub = document.createElement("div");
+  bub.className = "bubble" + (isTyping ? " thinking" : "");
+
+  if (isTyping) {
+    bub.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+  } else {
+    bub.textContent = content;
+  }
+
+  row.appendChild(av);
+  row.appendChild(bub);
+  msgsEl.appendChild(row);
+  msgsEl.scrollTop = msgsEl.scrollHeight;
+  return bub;
+}
+
+function parsePrice(s) {
+  const n = parseFloat(String(s || "").replace(/[$,\s]/g, ""));
+  return isNaN(n) ? null : n;
+}
+
+function fmt(n) { return "$" + Math.round(n).toLocaleString(); }
+
+function summarize(listings) {
+  const now = Date.now();
+  const weekAgo = now - 7 * 86400000;
+  const twoWeeksAgo = now - 14 * 86400000;
+  const thisWeek = listings.filter(l => l.date_added && new Date(l.date_added).getTime() >= weekAgo);
+  const lastWeek = listings.filter(l => { const t = l.date_added && new Date(l.date_added).getTime(); return t && t >= twoWeeksAgo && t < weekAgo; });
+
+  const byCity = {}, byFSA = {}, prices = [];
+  listings.forEach(l => {
+    const p = parsePrice(l.price);
+    if (!p) return;
+    prices.push(p);
+    const city = (l.city || "Unknown").trim();
+    const fsa = (l.postal || "").trim().slice(0,3).toUpperCase();
+    if (!byCity[city]) byCity[city] = [];
+    byCity[city].push(p);
+    if (fsa) { if (!byFSA[fsa]) byFSA[fsa] = []; byFSA[fsa].push(p); }
+  });
+
+  const avg = arr => arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : 0;
+  const twp = thisWeek.map(l=>parsePrice(l.price)).filter(Boolean);
+  const lwp = lastWeek.map(l=>parsePrice(l.price)).filter(Boolean);
+  const thisAvg = avg(twp), lastAvg = avg(lwp);
+  const trendPct = lastAvg ? ((thisAvg - lastAvg) / lastAvg * 100) : 0;
+
+  const topFSAs = Object.entries(byFSA).sort((a,b)=>b[1].length-a[1].length).slice(0,15)
+    .map(([f,ps])=>`${f}: ${ps.length} listings, avg ${fmt(avg(ps))}`);
+  const cities = Object.entries(byCity).sort((a,b)=>b[1].length-a[1].length)
+    .map(([c,ps])=>`${c}: ${ps.length} listings, avg ${fmt(avg(ps))}, range ${fmt(Math.min(...ps))}–${fmt(Math.max(...ps))}`);
+  const byPrice = listings.map(l=>({...l,_p:parsePrice(l.price)})).filter(l=>l._p).sort((a,b)=>b._p-a._p);
+
+  return {
+    total: listings.length, newThisWeek: thisWeek.length,
+    overallAvg: prices.length ? fmt(avg(prices)) : "N/A",
+    thisAvg: twp.length ? fmt(thisAvg) : "N/A",
+    lastAvg: lwp.length ? fmt(lastAvg) : "N/A",
+    trendPct: Math.round(trendPct * 10) / 10,
+    range: prices.length ? `${fmt(Math.min(...prices))} – ${fmt(Math.max(...prices))}` : "N/A",
+    cities, topFSAs,
+    top5exp: byPrice.slice(0,5).map(l=>`${l.address}, ${l.city} (${l.postal}) — ${fmt(l._p)}`),
+    top5cheap: byPrice.slice(-5).reverse().map(l=>`${l.address}, ${l.city} (${l.postal}) — ${fmt(l._p)}`)
+  };
+}
+
+function updateStats(d) {
+  document.getElementById("s-total").textContent = d.total.toLocaleString();
+  document.getElementById("s-week").textContent = d.newThisWeek.toLocaleString();
+  document.getElementById("s-avg").textContent = d.overallAvg;
+  document.getElementById("s-wavg").textContent = d.thisAvg;
+  const tr = document.getElementById("s-trend");
+  if (d.trendPct !== 0 && d.lastAvg !== "N/A") {
+    tr.textContent = (d.trendPct > 0 ? "▲ +" : "▼ ") + d.trendPct + "% vs last week";
+    tr.className = "stat-sub " + (d.trendPct > 0 ? "up" : "down");
+  }
+  document.getElementById("s-range").textContent = d.range;
+  document.getElementById("stats-strip").classList.add("visible");
+}
+
+function sysPrompt(d) {
+  return `You are a professional real estate market analyst for Curbside, a Toronto and Mississauga property platform. Answer concisely and professionally using only the live data below. Keep answers to 3–6 sentences unless a list is specifically needed. Use dollar signs and commas for prices. Never invent data not in the summary.
+
+LIVE MARKET DATA:
+Total listings: ${d.total.toLocaleString()}
+New this week: ${d.newThisWeek}
+Overall avg price: ${d.overallAvg}
+This week avg: ${d.thisAvg}
+Last week avg: ${d.lastAvg}
+Week-over-week trend: ${d.trendPct > 0 ? "+" : ""}${d.trendPct}%
+Price range: ${d.range}
+
+BY CITY:
+${d.cities.join("\n")}
+
+TOP 15 MOST ACTIVE FSAs:
+${d.topFSAs.join("\n")}
+
+TOP 5 MOST EXPENSIVE LISTINGS:
+${d.top5exp.join("\n")}
+
+TOP 5 MOST AFFORDABLE LISTINGS:
+${d.top5cheap.join("\n")}`;
+}
+
+async function startApp() {
+  const apiVal = document.getElementById("cfg-api").value.trim().replace(/\/+$/, "");
+  const keyVal = document.getElementById("cfg-key").value.trim();
+  if (!apiVal || !keyVal) { alert("Please fill in both fields."); return; }
+  API_BASE = apiVal;
+  API_KEY = keyVal;
+  document.getElementById("config-overlay").style.display = "none";
+  await connect();
+}
+
+async function connect() {
+  setStatus("warn", "Loading data...");
+  const loadBub = addMsg("bot", "", true);
+
+  for (let attempt = 1; attempt <= 1; attempt++) {
+    try {
+      if (attempt > 1) loadBub.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+      const resp = await fetch(`${API_BASE}/search?limit=5000`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      console.log("Parsing JSON...");
+      const json = await resp.json();
+      console.log("JSON parsed, extracting listings...");
+     const listings = Array.isArray(json) ? json : (json.items || json.results || json.data || []);
+      console.log("Listings count:", listings.length);
+      if (!listings.length) throw new Error("No listings returned");
+
+      console.log("Running summarize...");
+      mktData = summarize(listings);
+      console.log("Summarize done, updating stats...");
+      updateStats(mktData);
+      setStatus("ok", `${mktData.total.toLocaleString()} listings live`);
+
+      loadBub.className = "bubble";
+      loadBub.textContent = `Good morning! I've loaded ${mktData.total.toLocaleString()} live listings from your database.\n\nThe overall market average is ${mktData.overallAvg}, with ${mktData.newThisWeek} new listings added this week. I cover Toronto and Mississauga — ask me anything about prices, neighbourhoods, FSA trends, or specific listings.`;
+      sendBtn.disabled = false;
+      inputEl.focus();
+      return;
+    } catch(e) {
+      if (attempt >= 1) {
+        setStatus("err", "Connection failed");
+        loadBub.className = "bubble";
+        loadBub.innerHTML = `❌ Couldn't connect to your API after 3 attempts.\n\nError: ${e.message}\n\nMake sure your Flask API is running and the URL is correct.`;
+        const btn = document.createElement("span");
+        btn.className = "retry-btn";
+        btn.textContent = "↺ Retry";
+        btn.onclick = () => { loadBub.remove(); connect(); };
+        loadBub.appendChild(document.createElement("br"));
+        loadBub.appendChild(btn);
+      } else {
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+  }
+}
+
+async function send() {
+  const text = inputEl.value.trim();
+  if (!text || busy || !mktData) return;
+  busy = true;
+  sendBtn.disabled = true;
+  inputEl.value = "";
+  inputEl.style.height = "auto";
+
+  document.querySelectorAll(".sidebar-chip").forEach(c => c.classList.remove("active"));
+  addMsg("user", text);
+  const thinkBub = addMsg("bot", "", true);
+
+  try {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": API_KEY, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-5",
+        max_tokens: 1000,
+        system: sysPrompt(mktData),
+        messages: [{ role: "user", content: text }]
+      })
+    });
+    const data = await resp.json();
+    const reply = data.content?.find(b => b.type === "text")?.text || "Sorry, I couldn't generate a response.";
+    thinkBub.className = "bubble";
+    thinkBub.textContent = reply;
+  } catch(e) {
+    thinkBub.className = "bubble";
+    thinkBub.textContent = "Something went wrong — please try again.";
+  }
+
+  busy = false;
+  sendBtn.disabled = false;
+  inputEl.focus();
+  msgsEl.scrollTop = msgsEl.scrollHeight;
+}
+
+function ask(btn) {
+  document.querySelectorAll(".sidebar-chip").forEach(c => c.classList.remove("active"));
+  btn.classList.add("active");
+  inputEl.value = btn.textContent;
+  send();
+}
+
+inputEl.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+inputEl.addEventListener("input", () => {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + "px";
+});
+</script>
+</body>
+</html>

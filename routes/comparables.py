@@ -74,6 +74,8 @@ def auto_comparables():
 
     limit     = int(request.args.get("limit", 99999))
     price_pct = float(request.args.get("price_pct", 5)) / 100
+    radius_km = float(request.args.get("radius_km", 1.5))
+    delta     = radius_km / 111.0
 
     subject = None
     addr_lower = address.lower()
@@ -102,11 +104,6 @@ def auto_comparables():
         if (p.get("address") or "").lower().strip() == addr_lower:
             continue
 
-        # FSA filter — same first 3 letters of postal code
-        comp_fsa = (p.get("postal") or "").upper().replace(" ", "")[:3]
-        if sub_fsa and comp_fsa and sub_fsa != comp_fsa:
-            continue
-
         # Skip properties with no coordinates or NaN
         try:
             lat = float(p.get("latitude") or 0)
@@ -117,6 +114,11 @@ def auto_comparables():
         if lat == 0.0 and lon == 0.0:
             continue
         if lat != lat or lon != lon:
+            continue
+
+        # Bounding box filter — replaces FSA filter
+        if not (sub_lat - delta <= lat <= sub_lat + delta and
+                sub_lon - delta <= lon <= sub_lon + delta):
             continue
 
         dist = _haversine_km(sub_lat, sub_lon, lat, lon)
@@ -176,7 +178,7 @@ def auto_comparables():
                 "longitude": sub_lon,
             },
             "count":       len(comparables),
-            "fsa":         sub_fsa,
+            "radius_km":   radius_km,
             "comparables": comparables,
         }, indent=2),
         status=200,
