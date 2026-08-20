@@ -1,0 +1,3 @@
+from curbside_ai_features import init_embeddings_table
+
+init_embeddings_table()

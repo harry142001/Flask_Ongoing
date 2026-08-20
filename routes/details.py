@@ -1,10 +1,8 @@
-import copy
 import json
 import logging
 
 from flask import Blueprint, Response, jsonify, request
 
-from config import COMPARABLE_SCHEMA
 from database import connect_details
 from utils import _parse_json_field, parse_int
 
@@ -68,10 +66,8 @@ def api_property_details():
             rows = [dict(r) for r in con.execute(sql, params).fetchall()]
 
         for row in rows:
-            for field in ("sales_history", "comparables"):
+            for field in ("sales_history", "comparables", "tax_history", "assessed_value_history"):
                 row[field] = _parse_json_field(row.get(field), field)
-            if not row.get("comparables"):
-                row["comparables"] = [copy.deepcopy(COMPARABLE_SCHEMA)]
             if row.get("notes") is None:
                 row["notes"] = ""
 

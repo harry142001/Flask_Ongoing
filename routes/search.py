@@ -9,9 +9,12 @@ from cache import CACHE
 from config import TABLE
 from database import connect
 from utils import (
+    DEDUP_COLUMNS,
     _attach_details,
     _full_address,
+    add_dedup_columns,
     add_filters,
+    has_details,
     parse_int,
     respond,
     rows_to_dicts,
@@ -21,22 +24,26 @@ from utils import (
 log = logging.getLogger(__name__)
 search_bp = Blueprint("search", __name__)
 
+LIGHT_FIELDS = ("address", "city", "price", "latitude", "longitude", "postcode", "formatted_address")
 
-@search_bp.get("/api/v1/search")
-def api_search():
-    args = request.args
-    view = args.get("view", "json")
+SEARCH_FILTER_KEYS = (
+    "q", "address", "city", "agent", "broker",
+    "postcode", "province", "state", "latitude", "longitude",
+    "min_price", "max_price",
+)
+
+
+def _fetch_sorted_rows(args):
+    """Shared by /search and /search/light: applies filters (cache-path when
+    there are none, SQL path otherwise), converts to API shape, sorts by
+    formatted address. Returns (rows, rows_db) — rows_db is the pre-transform
+    count, used for logging in /search.
+    """
     limit = parse_int(args.get("limit"))
     page = max(1, parse_int(args.get("page"), 1))
     offset = (page - 1) * (limit or 0)
-    include_details = args.get("details", "true").lower() != "false"
 
-    filter_keys = (
-        "q", "address", "city", "agent", "broker",
-        "postcode", "province", "state", "latitude", "longitude",
-        "min_price", "max_price",
-    )
-    has_filters = any(args.get(k) for k in filter_keys)
+    has_filters = any(args.get(k) for k in SEARCH_FILTER_KEYS)
 
     if not has_filters and CACHE["loaded"]:
         rows_db = CACHE["properties"].copy()
@@ -57,6 +64,33 @@ def api_search():
     for r in rows:
         r["formatted_address"] = _full_address(r)
     rows.sort(key=lambda r: r.get("formatted_address", "").lower())
+    return rows, rows_db
+
+
+@search_bp.get("/api/v1/search/light")
+def api_search_light():
+    """Minimal-payload search — just enough fields for a map/list view.
+    For full property data (MLS fields + details/comparables), look up one
+    property at a time through the existing detail endpoint instead.
+    """
+    rows, _ = _fetch_sorted_rows(request.args)
+
+    light_rows = []
+    for r in rows:
+        light_row = {field: r.get(field) for field in LIGHT_FIELDS}
+        light_row["has_details"] = has_details(r, CACHE)
+        light_rows.append(light_row)
+
+    return jsonify({"count": len(light_rows), "items": light_rows}), 200
+
+
+@search_bp.get("/api/v1/search")
+def api_search():
+    args = request.args
+    view = args.get("view", "json")
+    include_details = args.get("details", "true").lower() != "false"
+
+    rows, rows_db = _fetch_sorted_rows(args)
 
     if include_details and CACHE["loaded"]:
         rows = _attach_details(rows, CACHE)
@@ -110,26 +144,11 @@ def api_search_clean():
 
     original_count = len(rows)
     df = pd.DataFrame(rows)
-
-    df["address_clean"] = df["address"].fillna("").astype(str).str.lower().str.strip()
-    df["city_clean"] = df["city"].fillna("").astype(str).str.lower().str.strip()
-    df["postal_clean"] = df["postal"].fillna("").astype(str).str.upper().str.replace(" ", "", regex=False)
-    prov_col = "state" if "state" in df.columns else "province"
-    df["province_clean"] = df[prov_col].fillna("").astype(str).str.lower().str.strip() if prov_col in df.columns else ""
-    df["price_clean"] = df["price"].fillna("").astype(str).str.strip()
-    df["agent_clean"] = df["agent"].fillna("").astype(str).str.lower().str.strip()
-    df["broker_clean"] = df["broker"].fillna("").astype(str).str.lower().str.strip()
-    df["lat_clean"] = df["latitude"].fillna("").astype(str).str.strip()
-    df["lon_clean"] = df["longitude"].fillna("").astype(str).str.strip()
-
-    dedup_keys = [
-        "address_clean", "city_clean", "province_clean", "postal_clean",
-        "price_clean", "agent_clean", "broker_clean", "lat_clean", "lon_clean",
-    ]
+    df = add_dedup_columns(df)
 
     df = df.sort_values("date_added", ascending=False, na_position="last")
-    df = df.drop_duplicates(subset=dedup_keys, keep="first")
-    df = df.drop(columns=dedup_keys, errors="ignore")
+    df = df.drop_duplicates(subset=list(DEDUP_COLUMNS), keep="first")
+    df = df.drop(columns=list(DEDUP_COLUMNS), errors="ignore")
 
     rows_clean = [to_api_row(r) for r in df.to_dict(orient="records")]
     for r in rows_clean:

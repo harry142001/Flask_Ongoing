@@ -1,10 +1,9 @@
-import copy
 import json
 import logging
 import re
 from typing import Any, Dict, List, Tuple
 
-from config import COMPARABLE_SCHEMA, MOCK_OVERRIDES
+from config import MOCK_OVERRIDES
 from database import REGION_SQL
 
 log = logging.getLogger(__name__)
@@ -21,6 +20,28 @@ def format_currency(value) -> str:
         return "${:,.0f}".format(float(str(value).replace(",", "").replace("$", "")))
     except (ValueError, TypeError):
         return str(value)
+
+
+def add_dedup_columns(df):
+    """Adds the *_clean columns used to detect duplicate listings.
+    Mutates and returns df for convenience."""
+    df["address_clean"] = df["address"].fillna("").astype(str).str.lower().str.strip()
+    df["city_clean"] = df["city"].fillna("").astype(str).str.lower().str.strip()
+    df["postal_clean"] = df["postal"].fillna("").astype(str).str.upper().str.replace(" ", "", regex=False)
+    prov_col = "state" if "state" in df.columns else "province"
+    df["province_clean"] = df[prov_col].fillna("").astype(str).str.lower().str.strip() if prov_col in df.columns else ""
+    df["price_clean"] = df["price"].fillna("").astype(str).str.strip()
+    df["agent_clean"] = df["agent"].fillna("").astype(str).str.lower().str.strip()
+    df["broker_clean"] = df["broker"].fillna("").astype(str).str.lower().str.strip()
+    df["lat_clean"] = df["latitude"].fillna("").astype(str).str.strip()
+    df["lon_clean"] = df["longitude"].fillna("").astype(str).str.strip()
+    return df
+
+
+DEDUP_COLUMNS = (
+    "address_clean", "city_clean", "province_clean", "postal_clean",
+    "price_clean", "agent_clean", "broker_clean", "lat_clean", "lon_clean",
+)
 
 
 def parse_int(v, default=None):
@@ -74,15 +95,16 @@ def _parse_json_field(value, field_name: str):
         except (json.JSONDecodeError, ValueError):
             log.warning("Could not parse JSON for field '%s'", field_name)
             return []
+    currency_keys = ("sale_price", "price", "tax_estimate", "phased_in_assessment")
+
     if isinstance(value, list):
         result = []
         for e in value:
             if isinstance(e, dict):
                 cleaned = {k: ("" if v is None else v) for k, v in e.items()}
-                if "compsaleamount" in cleaned and cleaned["compsaleamount"]:
-                    cleaned["compsaleamount"] = format_currency(cleaned["compsaleamount"])
-                if "price" in cleaned and cleaned["price"] != "":
-                    cleaned["price"] = format_currency(cleaned["price"])
+                for key in currency_keys:
+                    if key in cleaned and cleaned[key] != "":
+                        cleaned[key] = format_currency(cleaned[key])
                 result.append(cleaned)
             else:
                 result.append(e)
@@ -96,7 +118,7 @@ def _clean_details(row: Dict[str, Any]) -> Dict[str, Any]:
         "postal_code", "country", "latitude", "longitude", "price",
         "agent", "broker", "id", "notes", "comparables",
     }
-    json_fields = {"sales_history"}
+    json_fields = {"sales_history", "tax_history", "assessed_value_history"}
     out = {}
     for key, value in row.items():
         if key.lower() in skip:
@@ -109,6 +131,23 @@ def _clean_details(row: Dict[str, Any]) -> Dict[str, Any]:
             value = format_currency(value)
         out[key] = value
     return out
+
+
+MLS_DETAIL_FIELDS = (
+    "bedrooms", "bathrooms", "square_footage", "property_type", "parking",
+    "mls_number", "lot_size", "taxes", "description", "url", "flooring",
+    "cooling", "heating_type", "pool_type", "total_parking_spaces", "storeys",
+    "sqft_range", "community_name", "title", "age_of_building", "time_on_realtor",
+)
+
+
+def has_details(row: Dict[str, Any], cache: dict) -> bool:
+    """True if there's anything worth fetching from the detail endpoint for
+    this property — either a Teranet report, or any filled-in MLS field."""
+    addr = (row.get("address") or "").lower().strip()
+    if addr and addr in cache["property_details"]:
+        return True
+    return any((row.get(field) or "") != "" for field in MLS_DETAIL_FIELDS)
 
 
 def _apply_mock_overrides(record: Dict[str, Any]) -> Dict[str, Any]:
@@ -128,15 +167,29 @@ def _apply_mock_overrides(record: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _attach_details(rows: List[Dict[str, Any]], cache: dict) -> List[Dict[str, Any]]:
+    """Moves everything past the core top-level fields into `details`, for
+    every property — keeps the top-level schema identical across all records
+    (Eric's request: Curbside shouldn't have to branch on two schemas)."""
     for r in rows:
+        property_key = r.pop("property_key", "") or ""
+        mls_details = {field: r.pop(field, "") or "" for field in MLS_DETAIL_FIELDS}
+
         addr = (r.get("address") or "").lower().strip()
         detail_row = cache["property_details"].get(addr) if addr else None
         if detail_row:
-            r["details"] = _clean_details(detail_row)
-            comparables = _parse_json_field(detail_row.get("comparables"), "comparables")
-            if not comparables:
-                comparables = [copy.deepcopy(COMPARABLE_SCHEMA)]
-            r["comparables"] = comparables
+            report_details = _clean_details(detail_row)
+            # Report values win when present; MLS fills in anything the report left blank.
+            merged = {
+                "property_key": property_key,
+                **mls_details,
+                **{k: v for k, v in report_details.items() if v != ""},
+            }
+            r["comparables"] = _parse_json_field(detail_row.get("comparables"), "comparables")
+        else:
+            merged = {"property_key": property_key, **mls_details}
+            r["comparables"] = []
+
+        r["details"] = {k: v for k, v in merged.items() if v not in ("", [], None)}
 
         r = _apply_mock_overrides(r)
 

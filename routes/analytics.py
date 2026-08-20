@@ -5,7 +5,7 @@ from flask import Blueprint, jsonify, request
 
 from config import TABLE
 from database import connect
-from utils import add_filters, parse_int, rows_to_dicts, to_api_row
+from utils import DEDUP_COLUMNS, add_dedup_columns, add_filters, parse_int, rows_to_dicts, to_api_row
 
 analytics_bp = Blueprint("analytics", __name__)
 
@@ -107,19 +107,10 @@ def api_duplicates():
         return jsonify({"total_rows": 0, "summary": {}, "duplicates": []}), 200
 
     total_rows = len(df)
-    df["address_clean"] = df["address"].fillna("").astype(str).str.lower().str.strip()
-    df["city_clean"] = df["city"].fillna("").astype(str).str.lower().str.strip()
-    df["postal_clean"] = df["postal"].fillna("").astype(str).str.upper().str.replace(" ", "", regex=False)
-    prov_col = "state" if "state" in df.columns else "province"
-    df["province_clean"] = df[prov_col].fillna("").astype(str).str.lower().str.strip() if prov_col in df.columns else ""
-    df["price_clean"] = df["price"].fillna("").astype(str).str.strip()
-    df["agent_clean"] = df["agent"].fillna("").astype(str).str.lower().str.strip()
-    df["broker_clean"] = df["broker"].fillna("").astype(str).str.lower().str.strip()
-    df["lat_clean"] = df["latitude"].fillna("").astype(str).str.strip()
-    df["lon_clean"] = df["longitude"].fillna("").astype(str).str.strip()
+    df = add_dedup_columns(df)
 
     prop_keys = ["address_clean", "city_clean", "province_clean", "postal_clean"]
-    all_keys = prop_keys + ["price_clean", "agent_clean", "broker_clean", "lat_clean", "lon_clean"]
+    all_keys = list(DEDUP_COLUMNS)
 
     true_dup_mask = df.duplicated(subset=all_keys, keep="first")
     true_dup_count = int(true_dup_mask.sum())

@@ -29,4 +29,4 @@ ENV DETAILS_DB_PATH=/app/data/property_details.db
 EXPOSE 5002
 
 # Start the app
-CMD ["gunicorn", "-w", "2", "-k", "gthread", "-b", "0.0.0.0:5002", "app:app"]
+CMD ["gunicorn", "-w", "2", "-k", "gthread", "-b", "0.0.0.0:5002", "--timeout", "120", "app:app"]

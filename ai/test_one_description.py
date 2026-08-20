@@ -1,0 +1,3 @@
+from curbside_ai_features import backfill_descriptions
+
+backfill_descriptions(limit=1)

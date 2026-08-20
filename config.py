@@ -12,28 +12,16 @@ TABLE = os.getenv("TABLE", "properties")
 
 MOCK_OVERRIDES_PATH = os.path.join(BASE_DIR, "mock_overrides.json")
 
-# MPAC comparable field schema — empty values populated at runtime
+# Comparable sale field schema (matches the Teranet/GeoWarehouse report format) —
+# empty values populated at runtime
 COMPARABLE_SCHEMA = {
-    "property_location": "",
-    "basement_finish_area": "",
-    "compsaledate": "",
-    "compsaleamount": "",
-    "comparablesequence": "",
-    "lot_depth": "",
-    "lot_frontage": "",
-    "municipality": "",
-    "number_of_bedrooms": "",
-    "number_of_full_bathrooms": "",
-    "number_of_half_bathrooms": "",
-    "postal_code": "",
-    "property_type_style": "",
-    "property_type_description": "",
-    "province": "",
-    "comp_roll": "",
-    "lot_area": "",
-    "unit_of_measure_of_lot_area": "",
-    "primary_struc_area_above_grd": "",
-    "year_built": "",
+    "address": "",
+    "date": "",
+    "sale_price": "",
+    "lot_size_sqft": "",
+    "price_per_sqft": "",
+    "distance_m": "",
+    "pin": "",
 }
 
 
