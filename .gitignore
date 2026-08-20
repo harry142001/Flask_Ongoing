@@ -15,6 +15,8 @@ build/
 # Data files (large, not for version control)
 data/*.db
 data/*.sqbpro
+data/backups/
+/Database1.db
 
 # Operational state
 data/sent_addresses.txt
@@ -23,3 +25,21 @@ data/sent_addresses.txt
 .vscode/
 .idea/
 *.swp
+
+# InsForge & AI agent skills
+.insforge
+.agent
+.agents
+.augment
+.claude
+.cline
+.github/copilot*
+.kilocode
+.qoder
+.qwen
+.roo
+.trae
+.windsurf
+
+# Local environment secrets
+.env*.local
