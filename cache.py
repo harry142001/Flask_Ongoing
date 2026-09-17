@@ -3,6 +3,7 @@ from typing import Any, Dict
 
 from config import COMPARABLE_SCHEMA, DB_PATH, DETAILS_DB_PATH, TABLE
 from database import connect, connect_details
+from utils import normalize_address
 
 log = logging.getLogger(__name__)
 
@@ -29,14 +30,14 @@ def load_cache() -> None:
 
     try:
         main_addrs = {
-            (r.get("address") or "").lower().strip()
+            normalize_address(r.get("address"))
             for r in CACHE["properties"]
         }
         with connect_details() as con:
             rows = con.execute("SELECT * FROM property_details").fetchall()
             for r in rows:
                 d = dict(r)
-                addr = d.get("address", "").lower().strip()
+                addr = normalize_address(d.get("address"))
                 if addr:
                     CACHE["property_details"][addr] = d
                     # Records in details DB but not in main DB become synthetic entries

@@ -56,6 +56,65 @@ def clean_postal(s: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Address normalization
+# ---------------------------------------------------------------------------
+
+# Canada-Post-style common street-type abbreviations -> full form.
+STREET_SUFFIX_ABBREVIATIONS = {
+    "rd": "road", "st": "street", "ave": "avenue", "av": "avenue",
+    "blvd": "boulevard", "cir": "circle", "pl": "place", "dr": "drive",
+    "cres": "crescent", "ct": "court", "ln": "lane", "terr": "terrace",
+    "ter": "terrace", "pkwy": "parkway", "pky": "parkway", "sq": "square",
+    "hwy": "highway", "gdns": "gardens", "grv": "grove", "pt": "point",
+    "rdg": "ridge", "trl": "trail",
+}
+
+# Reverse of the above: full form -> every abbreviation that expands to it
+# (e.g. "avenue" -> ["ave", "av"]). Used to widen a search word like "road"
+# back out to "rd" as well, for cases where the DB has the abbreviated form.
+_STREET_SUFFIX_FULL_TO_ABBREVIATIONS: Dict[str, List[str]] = {}
+for _abbr, _full in STREET_SUFFIX_ABBREVIATIONS.items():
+    _STREET_SUFFIX_FULL_TO_ABBREVIATIONS.setdefault(_full, []).append(_abbr)
+
+
+def address_word_variants(word: str) -> List[str]:
+    """Given one address word, return other forms it should also match
+    (e.g. "rd" -> ["road"], "road" -> ["rd"]). Empty list if `word` isn't a
+    known street-suffix word, or if it isn't purely alphabetic (guards
+    ordinals like "1st"/"21st" the same way normalize_address does).
+    """
+    w = (word or "").lower()
+    if not w.isalpha():
+        return []
+    if w in STREET_SUFFIX_ABBREVIATIONS:
+        return [STREET_SUFFIX_ABBREVIATIONS[w]]
+    return _STREET_SUFFIX_FULL_TO_ABBREVIATIONS.get(w, [])
+
+
+def normalize_address(s: str) -> str:
+    """Lowercase/strip an address and expand common street-type abbreviations
+    (rd->road, st->street, ave->avenue, etc.) so equivalent addresses compare
+    equal regardless of which form was used.
+
+    Only alpha-only tokens are eligible for expansion, so ordinal tokens like
+    "1st"/"21st" can never be mistaken for a suffix -- the digit makes
+    token.isalpha() False by construction.
+
+    Must be used on both sides of every address comparison/lookup key
+    (cache.py builds keys with it, utils.py/routes look them up with it) --
+    using it on only one side silently breaks matching.
+    """
+    s = (s or "").strip().lower()
+    if not s:
+        return s
+    out = []
+    for tok in s.split():
+        core = tok.strip(".,")
+        out.append(STREET_SUFFIX_ABBREVIATIONS.get(core, core) if core.isalpha() else core)
+    return " ".join(out)
+
+
+# ---------------------------------------------------------------------------
 # Row transformation helpers
 # ---------------------------------------------------------------------------
 
@@ -144,7 +203,7 @@ MLS_DETAIL_FIELDS = (
 def has_details(row: Dict[str, Any], cache: dict) -> bool:
     """True if there's anything worth fetching from the detail endpoint for
     this property — either a Teranet report, or any filled-in MLS field."""
-    addr = (row.get("address") or "").lower().strip()
+    addr = normalize_address(row.get("address"))
     if addr and addr in cache["property_details"]:
         return True
     return any((row.get(field) or "") != "" for field in MLS_DETAIL_FIELDS)
@@ -160,7 +219,7 @@ def _apply_mock_overrides(record: Dict[str, Any]) -> Dict[str, Any]:
     def normalize(s):
         return (s or "").strip().lower()
 
-    composite = f"{normalize(record.get('address'))}|{normalize(record.get('city'))}|{normalize(record.get('province'))}"
+    composite = f"{normalize_address(record.get('address'))}|{normalize(record.get('city'))}|{normalize(record.get('province'))}"
     if composite in MOCK_OVERRIDES:
         record["comparables"] = MOCK_OVERRIDES[composite]["comparables"]
     return record
@@ -174,7 +233,7 @@ def _attach_details(rows: List[Dict[str, Any]], cache: dict) -> List[Dict[str, A
         property_key = r.pop("property_key", "") or ""
         mls_details = {field: r.pop(field, "") or "" for field in MLS_DETAIL_FIELDS}
 
-        addr = (r.get("address") or "").lower().strip()
+        addr = normalize_address(r.get("address"))
         detail_row = cache["property_details"].get(addr) if addr else None
         if detail_row:
             report_details = _clean_details(detail_row)
@@ -240,8 +299,16 @@ def add_filters(sql: str, params: List[Any], args) -> Tuple[str, List[Any]]:
                 is_zip5 = bool(re.fullmatch(r"\d{5}", t))
                 is_zip9 = bool(re.fullmatch(r"\d{5}-\d{4}", t))
 
+                # Widen the address match to cover street-suffix variants too,
+                # e.g. a search word "road" should also match a DB address
+                # stored as "... Rd", and vice versa.
+                addr_variant_likes = [f"%{v}%" for v in address_word_variants(t)]
+                addr_clause = " OR ".join(
+                    ["address LIKE ? COLLATE NOCASE"] * (1 + len(addr_variant_likes))
+                )
+
                 sql += (
-                    " AND (address LIKE ? COLLATE NOCASE"
+                    f" AND (({addr_clause})"
                     " OR city LIKE ? COLLATE NOCASE"
                     f" OR {REGION_SQL} LIKE ? COLLATE NOCASE"
                     " OR agent LIKE ? COLLATE NOCASE"
@@ -250,12 +317,13 @@ def add_filters(sql: str, params: List[Any], args) -> Tuple[str, List[Any]]:
                     " OR CAST(longitude AS TEXT) LIKE ?"
                     " OR REPLACE(postal,' ','') LIKE ?)"
                 )
+                params += [like] + addr_variant_likes
                 if is_fsa or is_full_postal:
-                    params += [like, like, like, like, like, latlon_like, latlon_like, token_clean + "%"]
+                    params += [like, like, like, like, latlon_like, latlon_like, token_clean + "%"]
                 elif is_zip5 or is_zip9:
-                    params += [like, like, like, like, like, latlon_like, latlon_like, t.split("-")[0] + "%"]
+                    params += [like, like, like, like, latlon_like, latlon_like, t.split("-")[0] + "%"]
                 else:
-                    params += [like, like, like, like, like, latlon_like, latlon_like, like]
+                    params += [like, like, like, like, latlon_like, latlon_like, like]
 
     addr = args.get("address")
     if addr:

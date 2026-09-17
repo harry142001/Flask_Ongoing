@@ -6,6 +6,7 @@ import os
 from flask import Blueprint, Response, jsonify, request
 
 from cache import CACHE
+from utils import normalize_address
 
 log = logging.getLogger(__name__)
 comparables_bp = Blueprint("comparables", __name__)
@@ -78,9 +79,9 @@ def auto_comparables():
     delta     = radius_km / 111.0
 
     subject = None
-    addr_lower = address.lower()
+    addr_lower = normalize_address(address)
     for p in CACHE.get("properties", []):
-        if (p.get("address") or "").lower().strip() == addr_lower:
+        if normalize_address(p.get("address")) == addr_lower:
             subject = p
             break
 
@@ -101,7 +102,7 @@ def auto_comparables():
 
     seen_addresses = {}
     for p in CACHE.get("properties", []):
-        if (p.get("address") or "").lower().strip() == addr_lower:
+        if normalize_address(p.get("address")) == addr_lower:
             continue
 
         # Skip properties with no coordinates or NaN
@@ -129,7 +130,7 @@ def auto_comparables():
             if abs(comp_price - sub_price) / sub_price > price_pct:
                 continue
 
-        addr_key = (p.get("address") or "").lower().strip()
+        addr_key = normalize_address(p.get("address"))
         if addr_key not in seen_addresses or dist < seen_addresses[addr_key]["distance_km"]:
             seen_addresses[addr_key] = {
                 "property_location":            p.get("address", ""),
