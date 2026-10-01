@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime, timedelta
 from typing import Any, List
 
 import pandas as pd
@@ -104,13 +105,23 @@ def api_search():
 
 @search_bp.get("/api/v1/recent")
 def api_recent():
+    """Properties with a real, confirmed listing date (date_added is only
+    ever set from verified source data -- see scripts/backfill_real_dates.py)
+    within the last `max_age_days` (default 60, i.e. ~2 months). Properties
+    with no confirmed date (date_added is NULL) never show up here.
+    """
     args = request.args
-    limit = parse_int(args.get("limit"), 50)
-    sql = f"SELECT rowid AS id, * FROM {TABLE} WHERE 1=1"
-    params: List[Any] = []
+    limit = parse_int(args.get("limit"))
+    max_age_days = parse_int(args.get("max_age_days"), 60)
+    cutoff = (datetime.now() - timedelta(days=max_age_days)).strftime("%Y-%m-%d")
+
+    sql = f"SELECT rowid AS id, * FROM {TABLE} WHERE date_added IS NOT NULL AND date_added != '' AND date_added >= ?"
+    params: List[Any] = [cutoff]
     sql, params = add_filters(sql, params, args)
-    sql += " ORDER BY rowid DESC LIMIT ?"
-    params.append(limit)
+    sql += " ORDER BY date_added DESC"
+    if limit:
+        sql += " LIMIT ?"
+        params.append(limit)
 
     with connect() as con:
         rows = rows_to_dicts(con.execute(sql, tuple(params)).fetchall())
@@ -119,7 +130,12 @@ def api_recent():
     for r in rows:
         r["formatted_address"] = _full_address(r)
 
-    return jsonify({"count": len(rows), "items": rows}), 200
+    if CACHE["loaded"]:
+        rows = _attach_details(rows, CACHE)
+        for r in rows:
+            r.get("details", {}).pop("time_on_realtor", None)
+
+    return respond(rows, args.get("view", "json"))
 
 
 @search_bp.get("/api/v1/search/clean")
